@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/macOS-required-blue" alt="macOS">
   <img src="https://img.shields.io/badge/python-≥3.10-blue" alt="Python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-  <img src="https://img.shields.io/github/v/release/cygnusnow/omniplan-mcp" alt="Release">
+  <img src="https://img.shields.io/github/v/release/cygnusyang/omniplan-mcp" alt="Release">
 </p>
 
 # OmniPlan MCP Server
@@ -49,10 +49,10 @@ brew install --cask omniplan
 
 ```bash
 # Option A: One-line installer (recommended)
-curl -fsSL https://raw.githubusercontent.com/cygnusnow/omniplan-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cygnusyang/omniplan-mcp/main/install.sh | bash
 
 # Option B: Manual clone
-git clone https://github.com/cygnusnow/omniplan-mcp.git
+git clone https://github.com/cygnusyang/omniplan-mcp.git
 cd omniplan-mcp
 pip install -e .
 ```
@@ -202,7 +202,7 @@ omniplan-mcp/
 
 ```bash
 # Clone
-git clone https://github.com/cygnusnow/omniplan-mcp.git
+git clone https://github.com/cygnusyang/omniplan-mcp.git
 cd omniplan-mcp
 
 # Install in editable mode

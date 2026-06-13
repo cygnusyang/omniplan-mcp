@@ -8,7 +8,7 @@ set -euo pipefail
 # setting up the OmniPlan MCP server.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/cygnusnow/omniplan-mcp/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/cygnusyang/omniplan-mcp/main/install.sh | bash
 #   # or
 #   ./install.sh
 # ──────────────────────────────────────────────────────────
@@ -102,10 +102,10 @@ if [[ -d "$INSTALL_DIR" ]]; then
     git pull --ff-only 2>/dev/null || warn "Could not git pull (you may need to update manually)"
 else
     info "Cloning project to $INSTALL_DIR..."
-    git clone https://github.com/cygnusnow/omniplan-mcp.git "$INSTALL_DIR" 2>/dev/null || {
+    git clone https://github.com/cygnusyang/omniplan-mcp.git "$INSTALL_DIR" 2>/dev/null || {
         err "Failed to clone repository."
         err "Check your internet connection or clone manually:"
-        err "  git clone https://github.com/cygnusnow/omniplan-mcp.git"
+        err "  git clone https://github.com/cygnusyang/omniplan-mcp.git"
         exit 1
     }
     ok "Project cloned successfully"
