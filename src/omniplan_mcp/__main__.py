@@ -9,6 +9,7 @@ import asyncio
 
 import mcp.server.stdio
 from mcp.server import NotificationOptions
+from mcp.server.models import InitializationOptions
 
 from . import __version__
 from .server import server
