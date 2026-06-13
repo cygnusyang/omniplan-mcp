@@ -18,8 +18,11 @@ import mcp.types as types
 from . import __version__
 from .parser import (
     build_task_tree,
+    evaluate_javascript,
+    export_schedule,
     get_resources_staff,
     parse_file,
+    read_schedule_settings,
 )
 
 server = Server("omniplan-mcp")
@@ -258,6 +261,71 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["filepath"],
             },
         ),
+        types.Tool(
+            name="get_schedule_settings",
+            description=(
+                "Read schedule/work-time settings from the active OmniPlan document, "
+                "including scheduling granularity, weekday working hours, "
+                "and calendar day schedule availability."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
+        types.Tool(
+            name="evaluate_omniplan_script",
+            description=(
+                "Evaluate Omni Automation JavaScript code in OmniPlan's runtime. "
+                "Powerful access to the full Omni Automation API (Alert, Form, "
+                "FilePicker, Document, Application, Task, Resource, etc.). "
+                "Note: An OmniPlan document must be open for this to work."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "script": {
+                        "type": "string",
+                        "description": (
+                            "JavaScript code to evaluate using Omni Automation API. "
+                            "Example: 'document.name' or 'new Alert(\"Hello\", \"World\").show()'"
+                        ),
+                    },
+                },
+                "required": ["script"],
+            },
+        ),
+        types.Tool(
+            name="export_schedule",
+            description=(
+                "Export the current OmniPlan schedule to a specific format. "
+                "Returns the path to the exported file."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Absolute path to the .mpp or .oplx file to export",
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": (
+                            "Export format. Options: OmniPlan XML (.oplx, default), "
+                            "OmniPlan Template (.oplt), HTML, CSV, "
+                            "Tab Delimited Text, iCal, OmniGraffle XML"
+                        ),
+                        "default": "OmniPlan XML",
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Where to save the exported file (optional, auto-generated if omitted)",
+                    },
+                },
+                "required": ["filepath"],
+            },
+        ),
     ]
 
 
@@ -275,6 +343,19 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             )
         ]
 
+    # Tools that don't need file parsing
+    if name == "evaluate_omniplan_script":
+        script = arguments.get("script", "")
+        return _format_evaluate_script(script)
+    elif name == "export_schedule":
+        filepath = arguments.get("filepath", "")
+        fmt = arguments.get("format", "OmniPlan XML")
+        output_path = arguments.get("output_path")
+        return _format_export(filepath, fmt, output_path)
+    elif name == "get_schedule_settings":
+        return _format_schedule_settings()
+
+    # Tools that require file parsing
     filepath = arguments.get("filepath", "")
 
     if not os.path.exists(filepath):
@@ -331,6 +412,66 @@ def _task_name_map(tasks: list[dict]) -> dict[int, str]:
 
 def _resource_name_map(resources: list[dict]) -> dict[int, str]:
     return {r["id"]: r.get("name", f"Resource #{r['id']}") for r in resources}
+
+
+def _format_evaluate_script(script: str) -> list[types.TextContent]:
+    """Evaluate Omni Automation JavaScript and return result."""
+    try:
+        result = evaluate_javascript(script)
+        if result.startswith("ERROR:"):
+            return [types.TextContent(type="text", text=f"JavaScript error: {result[6:].strip()}")]
+        return [types.TextContent(type="text", text=result)]
+    except RuntimeError as e:
+        return [types.TextContent(type="text", text=f"Error: {e}")]
+
+
+def _format_export(filepath: str, fmt: str, output_path: str | None) -> list[types.TextContent]:
+    """Export schedule and return the output path."""
+    if not os.path.exists(filepath):
+        return [types.TextContent(type="text", text=f"File not found: {filepath}")]
+    try:
+        result = export_schedule(filepath, fmt, output_path)
+        if result.startswith("ERROR:"):
+            return [types.TextContent(type="text", text=f"Export error: {result[6:].strip()}")]
+        return [
+            types.TextContent(
+                type="text",
+                text=f"Schedule exported successfully.\nFormat: {fmt}\nOutput: {result}",
+            )
+        ]
+    except (RuntimeError, FileNotFoundError) as e:
+        return [types.TextContent(type="text", text=f"Export error: {e}")]
+
+
+def _format_schedule_settings() -> list[types.TextContent]:
+    """Read and format schedule/work-time settings."""
+    try:
+        settings = read_schedule_settings()
+    except RuntimeError as e:
+        return [types.TextContent(type="text", text=f"Error: {e}")]
+
+    lines = ["\U0001f4c5 Schedule Settings", "=" * 60]
+
+    gran = settings.get("granularity", "")
+    if gran:
+        lines.append(f"Scheduling Granularity: {gran}")
+
+    weekdays = settings.get("weekdays", [])
+    if weekdays:
+        lines.append(f"\nWorking Hours ({len(weekdays)} days):")
+        for d in weekdays:
+            start = d.get("start_time", "")
+            end = d.get("end_time", "")
+            day_name = d.get("day", f"Day {d['day_number']}")
+            if start and end:
+                lines.append(f"  {day_name:10s} {start} → {end}")
+            else:
+                lines.append(f"  {day_name:10s} (non-working)")
+
+    if settings.get("has_calendar_schedule"):
+        lines.append("\nCalendar day schedule: Available (custom exceptions)")
+
+    return [types.TextContent(type="text", text="\n".join(lines))]
 
 
 # ── Output Formatters ─────────────────────────────────────────────────────
@@ -525,6 +666,12 @@ def _format_task_detail(tasks: list[dict], task_id: int | None, task_name: str) 
         lines.append(f"  Level:          {t.get('outline_depth', '')}")
         lines.append(f"  Start:          {t.get('start_date', 'N/A')}")
         lines.append(f"  End:            {t.get('end_date', 'N/A')}")
+        start_const = t.get('starting_constraint_date', '')
+        end_const = t.get('ending_constraint_date', '')
+        if start_const:
+            lines.append(f"  Constraint Start: {start_const}")
+        if end_const:
+            lines.append(f"  Constraint End:   {end_const}")
         lines.append(f"  Duration:       {t.get('duration_days', '0')} days")
         lines.append(f"  Progress:       {t.get('percent_complete', 0)}%")
         lines.append(f"  Effort:         {t.get('effort_hours', '0')}h")

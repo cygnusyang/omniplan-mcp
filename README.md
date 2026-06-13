@@ -155,9 +155,25 @@ Claude：调用 schedule_summary → 显示阶段概览和进度统计
 |------|-------------|------------|
 | `read_schedule` | Full task hierarchy with dates and progress | `filepath` (required), `format`: tree/flat/json |
 | `list_milestones` | All milestone tasks | `filepath` |
-| `list_resources` | All human resources | `filepath` |
+| `list_resources` | All human resources | `filepath`, `detail`: simple/full |
 | `search_tasks` | Search tasks by keyword | `filepath`, `keyword` |
 | `schedule_summary` | Phase overview and progress stats | `filepath` |
+| `get_task_detail` | Detailed info about a specific task | `filepath`, `task_id` or `task_name` |
+| `get_resource_detail` | Detailed info about a specific resource | `filepath`, `resource_name` |
+| `list_violations` | All scheduling conflicts/violations | `filepath` |
+| `list_assignments` | All resource-to-task assignments | `filepath` |
+| `list_dependencies` | All task dependency relationships | `filepath` |
+| `get_schedule_settings` | Scheduling granularity & working hours | (reads active OmniPlan document) |
+| `evaluate_omniplan_script` | Run Omni Automation JS in OmniPlan | `script` (JavaScript code) |
+| `export_schedule` | Export schedule to various formats | `filepath`, `format` (optional), `output_path` (optional) |
+
+### New in v0.3.0
+
+- **`get_schedule_settings`** — Reads scheduling granularity (exact/hourly/daily) and weekday working hours directly from the active OmniPlan document.
+- **`evaluate_omniplan_script`** — Evaluates Omni Automation JavaScript code inside OmniPlan's runtime. Enables access to the full Omni Automation API (Alert, Form, FilePicker, Document, Task, Resource, etc.). An OmniPlan document must be open.
+- **`export_schedule`** — Exports the schedule to various formats: OmniPlan XML (.oplx), HTML, CSV, Tab Delimited Text, iCal, OmniGraffle XML.
+- All tools now expose **constraint dates** (starting/ending constraint dates) for tasks.
+- Resource details now include **efficiency, cost/hour, cost/use, total hours, total cost, email, and notes**.
 
 ## How It Works
 

@@ -53,7 +53,7 @@ def test_parse_oplx():
 
     filepath = _create_test_oplx()
     try:
-        projects, resources, tasks = read_oplx(filepath)
+        projects, resources, tasks, violations, assignments, dependencies = read_oplx(filepath)
 
         # Project info
         assert len(projects) == 1

@@ -206,7 +206,17 @@ tell application "OmniPlan"
             set tdep to count of (every dependent of t)
         end try
 
-        set end of output to "task|" & tid & "|" & tname & "|" & ttype & "|" & tstart & "|" & tend & "|" & tdur & "|" & tpct & "|" & teff & "|" & treff & "|" & tceff & "|" & tdepth & "|" & tnum & "|" & tparent & "|" & tpri & "|" & tstat & "|" & tscost & "|" & trcost & "|" & ttcost & "|" & tnote & "|" & tchilds & "|" & tasgns & "|" & tpres & "|" & tdep
+        -- Constraint dates (from sdef)
+        set tstartConst to ""
+        set tendConst to ""
+        try
+            set tstartConst to date string of starting constraint date of t
+        end try
+        try
+            set tendConst to date string of ending constraint date of t
+        end try
+
+        set end of output to "task|" & tid & "|" & tname & "|" & ttype & "|" & tstart & "|" & tend & "|" & tdur & "|" & tpct & "|" & teff & "|" & treff & "|" & tceff & "|" & tdepth & "|" & tnum & "|" & tparent & "|" & tpri & "|" & tstat & "|" & tscost & "|" & trcost & "|" & ttcost & "|" & tnote & "|" & tchilds & "|" & tasgns & "|" & tpres & "|" & tdep & "|" & tstartConst & "|" & tendConst
     end repeat
 
     -- Violations
@@ -276,6 +286,17 @@ def _parse_as_record(line: str) -> dict[str, Any]:
             "id": int(parts[1]) if len(parts) > 1 and parts[1] else 0,
             "name": parts[2] if len(parts) > 2 else "",
             "resource_type": parts[3] if len(parts) > 3 else "",
+            "outline_depth": int(parts[4]) if len(parts) > 4 and parts[4] else 0,
+            "number": float(parts[5]) if len(parts) > 5 and parts[5] else 1.0,
+            "efficiency": float(parts[6]) if len(parts) > 6 and parts[6] else 1.0,
+            "cost_per_use": float(parts[7]) if len(parts) > 7 and parts[7] else 0,
+            "cost_per_hour": float(parts[8]) if len(parts) > 8 and parts[8] else 0,
+            "total_uses": int(parts[9]) if len(parts) > 9 and parts[9] else 0,
+            "total_seconds": float(parts[10]) if len(parts) > 10 and parts[10] else 0,
+            "total_cost": float(parts[11]) if len(parts) > 11 and parts[11] else 0,
+            "email": parts[12] if len(parts) > 12 else "",
+            "note": parts[13] if len(parts) > 13 else "",
+            "expanded": parts[14] if len(parts) > 14 else "",
         }
 
     elif record_type == "task":
@@ -296,7 +317,7 @@ def _parse_as_record(line: str) -> dict[str, Any]:
         pct_raw = float(parts[7]) if len(parts) > 7 and parts[7] else 0
         effort_sec = float(parts[8]) if len(parts) > 8 and parts[8] else 0
 
-        return {
+        result = {
             "type": "task",
             "id": int(parts[1]) if len(parts) > 1 and parts[1] else 0,
             "name": parts[2] if len(parts) > 2 else "",
@@ -314,6 +335,26 @@ def _parse_as_record(line: str) -> dict[str, Any]:
             "parent_id": int(parts[11]) if len(parts) > 11 and parts[11] else -1,
             "priority": int(parts[12]) if len(parts) > 12 and parts[12] else 0,
         }
+
+        # Optional extra fields from later pipe positions
+        if len(parts) > 22:
+            result["task_status"] = parts[14] if len(parts) > 14 else ""
+            result["static_cost"] = float(parts[15]) if len(parts) > 15 and parts[15] else 0
+            result["resource_cost"] = float(parts[16]) if len(parts) > 16 and parts[16] else 0
+            result["total_cost"] = float(parts[17]) if len(parts) > 17 and parts[17] else 0
+            result["note"] = parts[18] if len(parts) > 18 else ""
+            result["child_task_count"] = int(parts[19]) if len(parts) > 19 and parts[19] else 0
+            result["assignment_count"] = int(parts[20]) if len(parts) > 20 and parts[20] else 0
+            result["prerequisite_count"] = int(parts[21]) if len(parts) > 21 and parts[21] else 0
+            result["dependent_count"] = int(parts[22]) if len(parts) > 22 and parts[22] else 0
+        if len(parts) > 23:
+            result["remaining_effort_hours"] = _seconds_to_hours(float(parts[8]) if parts[8] else 0)
+            result["completed_effort_hours"] = _seconds_to_hours(float(parts[9]) if parts[9] else 0)
+        if len(parts) > 24:
+            result["starting_constraint_date"] = _parse_as_date(parts[24] if len(parts) > 24 else "")
+            result["ending_constraint_date"] = _parse_as_date(parts[25] if len(parts) > 25 else "")
+
+        return result
 
     return {"type": "unknown", "raw": line}
 
@@ -574,6 +615,201 @@ def parse_file(
             f"Unsupported file format: {ext}. "
             f"Supported: .mpp, .oplx"
         )
+
+
+def evaluate_javascript(script: str) -> str:
+    """Evaluate JavaScript in OmniPlan's Omni Automation runtime.
+
+    Uses the 'evaluate javascript' AppleScript command to run any
+    Omni Automation JS code directly in the active document context.
+
+    Args:
+        script: JavaScript code to evaluate.
+
+    Returns:
+        The result string from JavaScript evaluation.
+
+    Raises:
+        RuntimeError: If no document is open or execution fails.
+    """
+    as_script = (
+        'tell application "OmniPlan"\n'
+        '    try\n'
+        f'        set jsResult to evaluate javascript "{script}"\n'
+        '        if jsResult is missing value then\n'
+        '            return "undefined"\n'
+        '        end if\n'
+        '        return jsResult as string\n'
+        '    on error errMsg\n'
+        '        return "ERROR: " & errMsg\n'
+        '    end try\n'
+        'end tell'
+    )
+    return _run_osascript(as_script)
+
+
+def export_schedule(filepath: str, format_name: str = "OmniPlan XML", output_path: str | None = None) -> str:
+    """Export the active OmniPlan document to a specific format.
+
+    Uses the AppleScript 'export' command on the document.
+
+    Args:
+        filepath: Path to open (for context).
+        format_name: Export format name. Common options:
+            "OmniPlan XML" (.oplx), "OmniPlan Template" (.oplt),
+            "HTML", "CSV", "Tab Delimited Text", "iCal",
+            "OmniGraffle XML", "Work Breakdown Structure (WBS)"
+        output_path: Where to save the exported file.
+            If None, saves to a temp location and returns the path.
+
+    Returns:
+        Path to the exported file.
+    """
+    import tempfile
+
+    abs_path = os.path.abspath(filepath)
+    if output_path is None:
+        suffix = _export_suffix(format_name)
+        output_path = os.path.join(tempfile.mkdtemp(), f"export{suffix}")
+
+    # Open file
+    subprocess.run(["open", "-a", "OmniPlan", abs_path], capture_output=True, check=True)
+    import time
+    time.sleep(2)
+
+    try:
+        as_script = (
+            'tell application "OmniPlan"\n'
+            '    try\n'
+            f'        export document 1 to file "{output_path}" as "{format_name}"\n'
+            '        return "OK"\n'
+            '    on error errMsg\n'
+            '        return "ERROR: " & errMsg\n'
+            '    end try\n'
+            'end tell'
+        )
+        result = _run_osascript(as_script)
+        if result == "OK":
+            return output_path
+        return result
+    finally:
+        subprocess.run(
+            ["osascript", "-l", "AppleScript", "-e",
+             'tell application "OmniPlan" to close document 1 saving no'],
+            capture_output=True, timeout=30,
+        )
+
+
+def _export_suffix(format_name: str) -> str:
+    """Map export format name to file extension."""
+    mapping = {
+        "OmniPlan XML": ".oplx",
+        "OmniPlan Template": ".oplt",
+        "HTML": ".html",
+        "CSV": ".csv",
+        "Tab Delimited Text": ".txt",
+        "iCal": ".ics",
+        "OmniGraffle XML": ".graffle",
+        "Work Breakdown Structure (WBS)": ".html",
+    }
+    return mapping.get(format_name, ".txt")
+
+
+_SCHEDULE_SETTINGS_SCRIPT = r'''
+tell application "OmniPlan"
+    set docCount to count of documents
+    if docCount = 0 then
+        return "NO_DOCUMENT"
+    end if
+    set doc to document 1
+    set proj to project of doc
+    set sce to frontEditingScenario of proj
+    set sched to schedule of sce
+
+    set output to {{}}
+
+    -- Scheduling granularity
+    try
+        set gran to scheduling granularity of sce
+        set end of output to "granularity|" & gran
+    end try
+
+    -- Work week schedule
+    try
+        set wkSched to week day schedule of sched
+        repeat with dayNum from 1 to 7
+            set dayName to ""
+            set dayStart to ""
+            set dayEnd to ""
+            try
+                set dayName to (weekday of (date "Sunday, January 1, 2020" + (dayNum - 1) * days))
+            end try
+            try
+                set {startTime, endTime} to working times of wkSched for weekday dayNum
+                set dayStart to startTime
+                set dayEnd to endTime
+            end try
+            set end of output to "weekday|" & dayNum & "|" & dayStart & "|" & dayEnd
+        end repeat
+    end try
+
+    -- Calendar day schedule
+    try
+        set calSched to calendar day schedule of sched
+        set end of output to "calSchedule|available"
+    end try
+
+    set AppleScript's text item delimiters to {return}
+    return output as string
+end tell
+'''
+
+
+def read_schedule_settings() -> dict[str, Any]:
+    """Read schedule/work-time settings from the active OmniPlan document.
+
+    Returns:
+        Dict with keys: granularity, weekdays (list of day schedules).
+
+    Raises:
+        RuntimeError: If no document is open.
+    """
+    raw = _run_osascript(_SCHEDULE_SETTINGS_SCRIPT)
+
+    if raw == "NO_DOCUMENT":
+        raise RuntimeError(
+            "No document is open in OmniPlan. "
+            "Please open a project file first."
+        )
+
+    result: dict[str, Any] = {
+        "granularity": "",
+        "weekdays": [],
+        "has_calendar_schedule": False,
+    }
+
+    for line in raw.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("|")
+        record_type = parts[0]
+
+        if record_type == "granularity" and len(parts) > 1:
+            result["granularity"] = parts[1]
+        elif record_type == "weekday" and len(parts) > 3:
+            day_num = int(parts[1])
+            day_names = ["", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+            result["weekdays"].append({
+                "day": day_names[day_num] if 1 <= day_num <= 7 else f"Day {day_num}",
+                "day_number": day_num,
+                "start_time": parts[2],
+                "end_time": parts[3],
+            })
+        elif record_type == "calSchedule":
+            result["has_calendar_schedule"] = True
+
+    return result
 
 
 def build_task_tree(tasks: list[dict]) -> list[dict]:
