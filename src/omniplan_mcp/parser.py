@@ -507,6 +507,47 @@ def _parse_oplx_dir(dirpath: str) -> tuple[list[dict], list[dict], list[dict], l
         return _parse_xml_content(f.read())
 
 
+def _compute_task_status(
+    percent_complete: float,
+    start_date: str = "",
+    end_date: str = "",
+    leveled_start: str = "",
+    leveled_end: str = "",
+) -> str:
+    """Compute task status from completion percentage and dates.
+
+    Mimics OmniPlan's logic: 100% → finished, else compare dates to today.
+    Falls back to leveled-* dates when start-date/end-date are missing.
+    """
+    if percent_complete >= 100:
+        return "finished"
+
+    # Use leveled dates as fallback
+    s = start_date or leveled_start
+    e = end_date or leveled_end
+
+    if not s and not e:
+        return "ok"
+
+    # Try to parse end date
+    if e:
+        try:
+            end_dt = datetime.fromisoformat(e.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            if end_dt < now:
+                return "past due"
+            # Close to due: within 3 days
+            delta = (end_dt - now).days
+            if delta <= 3 and delta >= 0:
+                return "close to due date"
+            if delta == 0:
+                return "due now"
+        except (ValueError, TypeError):
+            pass
+
+    return "ok"
+
+
 def _parse_xml_content(content: str) -> tuple[list[dict], list[dict], list[dict], list, list, list]:
     """Parse XML content into structured records."""
     root = ET.fromstring(content)
@@ -551,6 +592,30 @@ def _parse_xml_content(content: str) -> tuple[list[dict], list[dict], list[dict]
         dur = _get_text(t, "duration")
         dur_sec = float(dur) if dur else 0
 
+        # Get percent-complete: standard tasks store it directly,
+        # group tasks may lack the tag so default to 0
+        pct_str = _get_text(t, "percent-complete")
+        percent_complete = float(pct_str) if pct_str else 0
+
+        # Fallback: compute from effort-done / effort ratio
+        if percent_complete == 0:
+            effort_str = _get_text(t, "effort")
+            effort_done_str = _get_text(t, "effort-done")
+            if effort_str and effort_done_str:
+                effort_val = float(effort_str)
+                effort_done_val = float(effort_done_str)
+                if effort_val > 0:
+                    percent_complete = round(effort_done_val / effort_val * 100, 1)
+
+        # Compute task status from dates and completion
+        task_status = _compute_task_status(
+            percent_complete,
+            _get_text(t, "start-date"),
+            _get_text(t, "end-date"),
+            _get_text(t, "leveled-start"),
+            _get_text(t, "leveled-end"),
+        )
+
         tasks.append({
             "type": "task",
             "id": tid,
@@ -561,27 +626,70 @@ def _parse_xml_content(content: str) -> tuple[list[dict], list[dict], list[dict]
             "duration_days": _seconds_to_days(dur_sec),
             "duration_hours": _seconds_to_hours(dur_sec),
             "duration_seconds": dur_sec,
-            "percent_complete": float(_get_text(t, "percent-complete") or 0),
+            "percent_complete": percent_complete,
             "effort_hours": _seconds_to_hours(float(_get_text(t, "effort") or 0)),
             "effort_seconds": float(_get_text(t, "effort") or 0),
-            "outline_depth": int(_get_text(t, "indentLevel") or 0),
+            "outline_depth": 0,  # Will be computed after parent resolution
             "outline_number": "",
             "parent_id": "",
             "priority": int(_get_text(t, "priority") or 500),
+            "task_status": task_status,
         })
         task_map[tid] = tasks[-1]
 
-    # Resolve parent relationships
+    # Resolve parent relationships and compute outline depth
+    def _set_depth(tid: str, depth: int) -> None:
+        """Recursively set outline_depth for a task and its children."""
+        if tid not in task_map:
+            return
+        task_map[tid]["outline_depth"] = depth
+        for child in task_map[tid].get("_children", []):
+            _set_depth(child, depth + 1)
+
     for t in root.findall(f".//{NS}task"):
         tid = t.get("id", "")
         if tid in task_map:
-            # Find parent by checking if this task is a child of another
-            for parent in root.findall(f".//{NS}task"):
-                for child in parent:
-                    clocal = child.tag.split("}")[1] if "}" in child.tag else child.tag
-                    if clocal == "child-task" and child.get("idref", "") == tid:
-                        task_map[tid]["parent_id"] = parent.get("id", "")
-                        break
+            task_map[tid]["_children"] = []
+            for child in t:
+                clocal = child.tag.split("}")[1] if "}" in child.tag else child.tag
+                if clocal == "child-task":
+                    cid = child.get("idref", "")
+                    task_map[tid]["_children"].append(cid)
+                    if cid in task_map:
+                        task_map[cid]["parent_id"] = tid
+
+    # Find root tasks (those with no parent or parent is root group)
+    # and compute outline_depth recursively
+    for tid, tdata in task_map.items():
+        if not tdata.get("parent_id") or tdata["parent_id"] == "t-1":
+            _set_depth(tid, 0)
+
+    # Compute group task completion from children (bottom-up)
+    # Process in reverse depth order so children are computed before parents
+    sorted_tasks = sorted(tasks, key=lambda t: t["outline_depth"], reverse=True)
+    for t in sorted_tasks:
+        if t["task_type"] != "group":
+            continue
+        # _children is stored in task_map copy, not in the original tasks list
+        tid = t["id"]
+        if tid not in task_map:
+            continue
+        children_ids = task_map[tid].get("_children", [])
+        children = [task_map.get(cid) for cid in children_ids if cid in task_map]
+        if not children:
+            continue
+        # Average child completion, weighted equally
+        child_pcts = [c.get("percent_complete", 0) for c in children]
+        t["percent_complete"] = round(sum(child_pcts) / len(child_pcts), 1)
+        # Update task_status if all children are finished
+        if all(c.get("task_status") == "finished" for c in children):
+            t["task_status"] = "finished"
+        elif t["percent_complete"] >= 100:
+            t["task_status"] = "finished"
+
+    # Remove internal _children helper field from output
+    for t in tasks:
+        t.pop("_children", None)
 
     return projects, resources, tasks, [], [], []
 
@@ -632,10 +740,14 @@ def evaluate_javascript(script: str) -> str:
     Raises:
         RuntimeError: If no document is open or execution fails.
     """
+    # Escape the script for safe embedding in AppleScript string
+    # AppleScript uses \" for escaped quotes within string literals
+    escaped_script = script.replace("\\", "\\\\").replace('"', '\\"')
+
     as_script = (
         'tell application "OmniPlan"\n'
         '    try\n'
-        f'        set jsResult to evaluate javascript "{script}"\n'
+        f'        set jsResult to evaluate javascript "{escaped_script}"\n'
         '        if jsResult is missing value then\n'
         '            return "undefined"\n'
         '        end if\n'
@@ -678,10 +790,13 @@ def export_schedule(filepath: str, format_name: str = "OmniPlan XML", output_pat
     time.sleep(2)
 
     try:
+        # Escape backslashes and quotes in file paths for safe AppleScript embedding
+        safe_path = output_path.replace("\\", "\\\\").replace('"', '\\"')
+        safe_format = format_name.replace("\\", "\\\\").replace('"', '\\"')
         as_script = (
             'tell application "OmniPlan"\n'
             '    try\n'
-            f'        export document 1 to file "{output_path}" as "{format_name}"\n'
+            f'        export document 1 to file "{safe_path}" as "{safe_format}"\n'
             '        return "OK"\n'
             '    on error errMsg\n'
             '        return "ERROR: " & errMsg\n'
@@ -828,7 +943,16 @@ def build_task_tree(tasks: list[dict]) -> list[dict]:
     for t in tasks:
         tid = t["id"]
         parent_id = t["parent_id"]
-        if parent_id == -1 or parent_id == "" or parent_id not in task_map:
+        # Handle both integer (-1, -1) and string ("", "t-1") no-parent indicators
+        is_root = False
+        if isinstance(parent_id, int) and parent_id <= 0:
+            is_root = True
+        elif isinstance(parent_id, str) and (parent_id == "" or parent_id == "t-1"):
+            is_root = True
+        elif parent_id not in task_map:
+            is_root = True
+
+        if is_root:
             roots.append(task_map[tid])
         else:
             parent = task_map.get(parent_id)
