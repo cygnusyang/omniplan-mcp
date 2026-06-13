@@ -113,3 +113,157 @@ def test_build_task_tree():
     assert len(tree[0]["children"]) == 2
     assert tree[0]["children"][0]["name"] == "Task A"
     assert tree[0]["children"][1]["name"] == "Milestone X"
+
+
+def test_build_task_tree_string_parent():
+    """Test build_task_tree with string parent IDs (.oplx style)."""
+    from omniplan_mcp.parser import build_task_tree
+
+    tasks = [
+        {"id": "t1", "name": "Group", "task_type": "group", "parent_id": ""},
+        {"id": "t2", "name": "Child", "task_type": "task", "parent_id": "t1"},
+        {"id": "t3", "name": "Orphan", "task_type": "task", "parent_id": "nonexistent"},
+        {"id": "t-1", "name": "Root", "task_type": "group", "parent_id": ""},
+    ]
+    tree = build_task_tree(tasks)
+    assert len(tree) == 3  # t1, t3 (parent not found), t-1 are roots
+    root_names = {t["name"] for t in tree}
+    assert root_names == {"Group", "Orphan", "Root"}
+
+
+def test_percent_compute_from_effort():
+    """Test .oplx style percent-complete from effort-done/effort."""
+    from omniplan_mcp.parser import parse_file
+    import tempfile, zipfile
+
+    xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2025-01-01T00:00:00.000Z</start-date>
+  <task id="t1">
+    <title>Task with effort</title>
+    <effort>288000</effort>
+    <effort-done>144000</effort-done>
+  </task>
+  <task id="t2">
+    <title>Group</title>
+    <type>group</type>
+    <child-task idref="t3"/>
+    <child-task idref="t4"/>
+  </task>
+  <task id="t3">
+    <title>Sub A</title>
+    <effort>144000</effort>
+    <effort-done>144000</effort-done>
+  </task>
+  <task id="t4">
+    <title>Sub B</title>
+    <effort>144000</effort>
+    <effort-done>72000</effort-done>
+  </task>
+</scenario>'''
+    tmp = tempfile.NamedTemporaryFile(suffix='.oplx', delete=False)
+    with zipfile.ZipFile(tmp, 'w') as z:
+        z.writestr('Actual.xml', xml)
+    try:
+        proj, res, tasks, violations, assignments, deps = parse_file(tmp.name)
+        task_map = {t["id"]: t for t in tasks}
+        assert task_map["t1"]["percent_complete"] == 50.0  # 144000/288000
+        assert task_map["t3"]["percent_complete"] == 100.0  # 144000/144000
+        assert task_map["t4"]["percent_complete"] == 50.0  # 72000/144000
+        # Group should be average of children: (100+50)/2 = 75
+        assert task_map["t2"]["percent_complete"] == 75.0
+    finally:
+        os.unlink(tmp.name)
+
+
+def test_outline_depth():
+    """Test outline_depth computation from parent-child relationships."""
+    from omniplan_mcp.parser import parse_file
+    import tempfile, zipfile
+
+    xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2025-01-01T00:00:00.000Z</start-date>
+  <task id="t1">
+    <title>Level 0</title>
+    <type>group</type>
+    <child-task idref="t2"/>
+  </task>
+  <task id="t2">
+    <title>Level 1</title>
+    <type>group</type>
+    <child-task idref="t3"/>
+  </task>
+  <task id="t3">
+    <title>Level 2</title>
+    <effort>28800</effort>
+  </task>
+</scenario>'''
+    tmp = tempfile.NamedTemporaryFile(suffix='.oplx', delete=False)
+    with zipfile.ZipFile(tmp, 'w') as z:
+        z.writestr('Actual.xml', xml)
+    try:
+        proj, res, tasks, violations, assignments, deps = parse_file(tmp.name)
+        task_map = {t["id"]: t for t in tasks}
+        assert task_map["t1"]["outline_depth"] == 0
+        assert task_map["t2"]["outline_depth"] == 1
+        assert task_map["t3"]["outline_depth"] == 2
+    finally:
+        os.unlink(tmp.name)
+
+
+def test_task_status():
+    """Test task_status computation for .oplx tasks."""
+    from omniplan_mcp.parser import parse_file
+    import tempfile, zipfile
+
+    xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2025-01-01T00:00:00.000Z</start-date>
+  <task id="t1">
+    <title>Finished</title>
+    <effort>28800</effort>
+    <effort-done>28800</effort-done>
+  </task>
+  <task id="t2">
+    <title>Not started</title>
+    <effort>28800</effort>
+  </task>
+</scenario>'''
+    tmp = tempfile.NamedTemporaryFile(suffix='.oplx', delete=False)
+    with zipfile.ZipFile(tmp, 'w') as z:
+        z.writestr('Actual.xml', xml)
+    try:
+        proj, res, tasks, violations, assignments, deps = parse_file(tmp.name)
+        task_map = {t["id"]: t for t in tasks}
+        assert task_map["t1"]["task_status"] == "finished"
+        assert task_map["t2"]["task_status"] == "ok"
+    finally:
+        os.unlink(tmp.name)
+
+
+def test_actual_xml_preferred():
+    """Test that Actual.xml is preferred over backup XML files."""
+    from omniplan_mcp.parser import parse_file
+    import tempfile, zipfile
+
+    # Create a .oplx with both Actual.xml (correct) and a backup (stale)
+    xml_actual = '''<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2025-01-01T00:00:00.000Z</start-date>
+  <task id="t1"><title>Actual</title><effort>28800</effort></task>
+</scenario>'''
+    xml_stale = '''<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2025-01-01T00:00:00.000Z</start-date>
+  <task id="t1"><title>Stale</title><effort>28800</effort></task>
+</scenario>'''
+    tmp = tempfile.NamedTemporaryFile(suffix='.oplx', delete=False)
+    with zipfile.ZipFile(tmp, 'w') as z:
+        z.writestr('Actual.xml', xml_actual)
+        z.writestr('AAAAA.xml', xml_stale)  # Sorts before Actual.xml alphabetically
+    try:
+        proj, res, tasks, violations, assignments, deps = parse_file(tmp.name)
+        assert tasks[0]["name"] == "Actual", f"Expected Actual, got {tasks[0]['name']}"
+    finally:
+        os.unlink(tmp.name)

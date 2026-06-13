@@ -17,12 +17,23 @@ import mcp.types as types
 
 from . import __version__
 from .parser import (
+    add_dependency,
+    add_task,
     build_task_tree,
+    clear_constraint_date,
+    delete_task,
     evaluate_javascript,
     export_schedule,
     get_resources_staff,
+    lookup_task,
     parse_file,
     read_schedule_settings,
+    remove_dependency,
+    rename_task,
+    save_document,
+    set_task_completed,
+    set_task_completed_by_name,
+    set_task_duration,
 )
 
 server = Server("omniplan-mcp")
@@ -296,6 +307,208 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["script"],
             },
         ),
+        # ── Write Operations ────────────────────────────────────────────────
+        types.Tool(
+            name="set_task_completed",
+            description=(
+                "Set a task to 100% complete. Requires an open OmniPlan document. "
+                "Use AppleScript task ID (numeric, e.g. 258) or XML ID (e.g. t258). "
+                "With include_subtree=true, also sets all descendant tasks to 100%."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric like 258, or XML like t258)",
+                    },
+                    "include_subtree": {
+                        "type": "boolean",
+                        "description": "Also set all child tasks to 100% (default: true)",
+                        "default": True,
+                    },
+                },
+                "required": ["task_id"],
+            },
+        ),
+        types.Tool(
+            name="set_task_completed_by_name",
+            description=(
+                "Set a task to 100% complete by exact name. "
+                "With include_subtree=true, also sets all descendant tasks to 100%."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_name": {
+                        "type": "string",
+                        "description": "Exact name of the task",
+                    },
+                    "include_subtree": {
+                        "type": "boolean",
+                        "description": "Also set all child tasks to 100% (default: true)",
+                        "default": True,
+                    },
+                },
+                "required": ["task_name"],
+            },
+        ),
+        types.Tool(
+            name="add_dependency",
+            description=(
+                "Add a finish-to-start dependency: dependent_task ← prerequisite_task. "
+                "The dependent task will wait for the prerequisite to finish."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dependent_task_id": {
+                        "type": "string",
+                        "description": "The task that must wait (AppleScript numeric ID)",
+                    },
+                    "prerequisite_task_id": {
+                        "type": "string",
+                        "description": "The task that must finish first",
+                    },
+                },
+                "required": ["dependent_task_id", "prerequisite_task_id"],
+            },
+        ),
+        types.Tool(
+            name="remove_dependency",
+            description="Remove a dependency between two tasks.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dependent_task_id": {
+                        "type": "string",
+                        "description": "The dependent task",
+                    },
+                    "prerequisite_task_id": {
+                        "type": "string",
+                        "description": "The prerequisite task to remove",
+                    },
+                },
+                "required": ["dependent_task_id", "prerequisite_task_id"],
+            },
+        ),
+        types.Tool(
+            name="set_task_duration",
+            description=(
+                "Set a task's duration in working seconds. "
+                "1 working day = 28800 seconds. "
+                "Example: 5 days = 144000 seconds."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric)",
+                    },
+                    "duration_seconds": {
+                        "type": "integer",
+                        "description": "Duration in working seconds",
+                    },
+                },
+                "required": ["task_id", "duration_seconds"],
+            },
+        ),
+        types.Tool(
+            name="clear_constraint_date",
+            description="Remove the starting constraint (locked start date) from a task.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric)",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        ),
+        types.Tool(
+            name="rename_task",
+            description="Rename a task.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric)",
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "New name for the task",
+                    },
+                },
+                "required": ["task_id", "new_name"],
+            },
+        ),
+        types.Tool(
+            name="delete_task",
+            description="Delete a task and all its children.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric)",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        ),
+        types.Tool(
+            name="add_task",
+            description="Add a new task under a parent group.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "parent_task_id": {
+                        "type": "string",
+                        "description": "Parent group task ID (AppleScript numeric)",
+                    },
+                    "task_name": {
+                        "type": "string",
+                        "description": "Name for the new task",
+                    },
+                    "duration_seconds": {
+                        "type": "integer",
+                        "description": "Duration in working seconds (default: 28800 = 1 day)",
+                        "default": 28800,
+                    },
+                },
+                "required": ["parent_task_id", "task_name"],
+            },
+        ),
+        types.Tool(
+            name="save_document",
+            description="Save the current OmniPlan document.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
+        types.Tool(
+            name="lookup_task",
+            description=(
+                "Search for a task by name and return its ID, type, and other details. "
+                "Use this to find the correct numeric ID before calling other write operations."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "search_name": {
+                        "type": "string",
+                        "description": "Full or partial task name (case-insensitive)",
+                    },
+                },
+                "required": ["search_name"],
+            },
+        ),
         types.Tool(
             name="export_schedule",
             description=(
@@ -399,6 +612,58 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         return _format_assignments(assignments, tasks, resources)
     elif name == "list_dependencies":
         return _format_dependencies(dependencies, tasks)
+    # ── Write Operation Handlers ────────────────────────────────────────
+    elif name == "lookup_task":
+        search_name = arguments.get("search_name", "")
+        result = lookup_task(search_name)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "set_task_completed":
+        task_id = arguments.get("task_id", "")
+        include_subtree = arguments.get("include_subtree", True)
+        result = set_task_completed(task_id, include_subtree)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "set_task_completed_by_name":
+        task_name = arguments.get("task_name", "")
+        include_subtree = arguments.get("include_subtree", True)
+        result = set_task_completed_by_name(task_name, include_subtree)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "add_dependency":
+        dep = arguments.get("dependent_task_id", "")
+        pre = arguments.get("prerequisite_task_id", "")
+        result = add_dependency(dep, pre)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "remove_dependency":
+        dep = arguments.get("dependent_task_id", "")
+        pre = arguments.get("prerequisite_task_id", "")
+        result = remove_dependency(dep, pre)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "set_task_duration":
+        task_id = arguments.get("task_id", "")
+        duration_seconds = arguments.get("duration_seconds", 0)
+        result = set_task_duration(task_id, duration_seconds)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "clear_constraint_date":
+        task_id = arguments.get("task_id", "")
+        result = clear_constraint_date(task_id)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "rename_task":
+        task_id = arguments.get("task_id", "")
+        new_name = arguments.get("new_name", "")
+        result = rename_task(task_id, new_name)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "delete_task":
+        task_id = arguments.get("task_id", "")
+        result = delete_task(task_id)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "add_task":
+        parent_id = arguments.get("parent_task_id", "")
+        task_name = arguments.get("task_name", "")
+        duration_seconds = arguments.get("duration_seconds", 28800)
+        result = add_task(parent_id, task_name, duration_seconds)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "save_document":
+        result = save_document()
+        return [types.TextContent(type="text", text=result)]
     else:
         return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
 

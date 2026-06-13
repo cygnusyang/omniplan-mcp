@@ -166,14 +166,30 @@ Claude：调用 schedule_summary → 显示阶段概览和进度统计
 | `get_schedule_settings` | Scheduling granularity & working hours | (reads active OmniPlan document) |
 | `evaluate_omniplan_script` | Run Omni Automation JS in OmniPlan | `script` (JavaScript code) |
 | `export_schedule` | Export schedule to various formats | `filepath`, `format` (optional), `output_path` (optional) |
+| `lookup_task` | Find task by name, get its numeric ID | `search_name` |
+| `set_task_completed` | Set task to 100% complete | `task_id`, `include_subtree` |
+| `set_task_completed_by_name` | Set task to 100% complete by name | `task_name`, `include_subtree` |
+| `add_dependency` | Add finish-to-start dependency | `dependent_task_id`, `prerequisite_task_id` |
+| `remove_dependency` | Remove a dependency | `dependent_task_id`, `prerequisite_task_id` |
+| `set_task_duration` | Change task duration | `task_id`, `duration_seconds` |
+| `clear_constraint_date` | Remove locked start date | `task_id` |
+| `rename_task` | Rename a task | `task_id`, `new_name` |
+| `delete_task` | Delete a task and its children | `task_id` |
+| `add_task` | Add a new task under a parent | `parent_task_id`, `task_name`, `duration_seconds` (optional) |
+| `save_document` | Save the OmniPlan document | (none) |
 
-### New in v0.3.0
+### New in v0.4.0
 
-- **`get_schedule_settings`** — Reads scheduling granularity (exact/hourly/daily) and weekday working hours directly from the active OmniPlan document.
-- **`evaluate_omniplan_script`** — Evaluates Omni Automation JavaScript code inside OmniPlan's runtime. Enables access to the full Omni Automation API (Alert, Form, FilePicker, Document, Task, Resource, etc.). An OmniPlan document must be open.
-- **`export_schedule`** — Exports the schedule to various formats: OmniPlan XML (.oplx), HTML, CSV, Tab Delimited Text, iCal, OmniGraffle XML.
-- All tools now expose **constraint dates** (starting/ending constraint dates) for tasks.
-- Resource details now include **efficiency, cost/hour, cost/use, total hours, total cost, email, and notes**.
+- **12 new write-operation tools** — Now you can modify schedules directly from Claude:
+  - **`lookup_task`** — Find any task by name to get its numeric ID
+  - **`set_task_completed` / `set_task_completed_by_name`** — Mark tasks as 100% complete
+  - **`add_dependency` / `remove_dependency`** — Manage task dependencies (prerequisites)
+  - **`set_task_duration`** — Adjust task durations
+  - **`clear_constraint_date`** — Remove locked/constraint dates
+  - **`rename_task` / `delete_task` / `add_task`** — Structure editing
+  - **`save_document`** — Persist changes to disk
+- **Bug fixes**: .oplx parsing now prefers Actual.xml (fixes stale backup reads), outline_depth computed from hierarchy, percent-complete derived from effort-done/effort ratio, task_status computed for .oplx tasks, evaluate_javascript quotes properly escaped
+- **Parser robustness**: build_task_tree handles both string and integer parent_ids
 
 ## How It Works
 

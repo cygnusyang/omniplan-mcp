@@ -479,14 +479,17 @@ def _parse_oplx_zip(filepath: str) -> tuple[list[dict], list[dict], list[dict], 
     with zipfile.ZipFile(filepath) as z:
         names = z.namelist()
         target = None
-        for n in names:
-            if n.endswith(".xml"):
-                content = z.read(n).decode("utf-8")
-                if "<task" in content and "<title>" in content:
-                    target = content
-                    break
-        if target is None:
+        # Always prefer Actual.xml (it contains the latest data).
+        # OmniPlan creates backup XML files on save that may be stale.
+        if "Actual.xml" in names:
             target = z.read("Actual.xml").decode("utf-8")
+        else:
+            for n in names:
+                if n.endswith(".xml"):
+                    content = z.read(n).decode("utf-8")
+                    if "<task" in content and "<title>" in content:
+                        target = content
+                        break
 
     return _parse_xml_content(target)
 
@@ -965,3 +968,406 @@ def build_task_tree(tasks: list[dict]) -> list[dict]:
 def get_resources_staff(resources: list[dict]) -> list[dict]:
     """Filter only person-type resources."""
     return [r for r in resources if r.get("resource_type") == "person"]
+
+
+# ── Write Operations (AppleScript bridge to OmniPlan) ─────────────────────
+
+
+def lookup_task(search_name: str) -> str:
+    """Find a task by name and return its details (ID, type, etc.).
+
+    Args:
+        search_name: Full or partial task name (case-insensitive).
+
+    Returns:
+        Formatted list of matching tasks with their IDs.
+    """
+    safe_name = search_name.replace('"', '\\"')
+    script = (
+        'tell application "OmniPlan"\n'
+        '    set doc to document 1\n'
+        '    set proj to project of doc\n'
+        '    set sce to frontEditingScenario of proj\n'
+        '    set allTasks to every task of sce\n'
+        '    set output to {}\n'
+        '    repeat with t in allTasks\n'
+        '        set tname to name of t\n'
+        '        if tname contains "' + safe_name + '" then\n'
+        '            set tid to id of t\n'
+        '            set end of output to "id=" & tid & " name=" & tname\n'
+        '        end if\n'
+        '    end repeat\n'
+        '    if (count of output) = 0 then\n'
+        '        return "No tasks found matching: ' + safe_name + '"\n'
+        '    end if\n'
+        '    set AppleScript\'s text item delimiters to {return}\n'
+        '    return output as string\n'
+        'end tell'
+    )
+    return _run_osascript(script)
+
+
+def _run_as(script: str) -> str:
+    """Run an AppleScript and return stdout, or raise on failure."""
+    return _run_osascript(script)
+
+
+
+
+def set_task_completed(task_id: str, include_subtree: bool = True) -> str:
+    """Set a task to 100% complete via AppleScript.
+
+    Args:
+        task_id: Task ID — XML ID like "t258" or numeric like "258".
+        include_subtree: If True, recursively set all descendants to 100%.
+
+    Returns:
+        Summary of what was updated.
+    """
+    # Strip "t" prefix to get the numeric ID AppleScript uses
+    tid = task_id.lstrip("t")
+
+    if include_subtree:
+        script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    set countUpdated to 0
+    set resultLines to {{}}
+    repeat with t in allTasks
+        if id of t = {tid} then
+            set tname to name of t
+            set completed of t to 1.0
+            set countUpdated to countUpdated + 1
+            set end of resultLines to "Updated: " & tname & " (GROUP)"
+            -- Get all descendants recursively (2 levels deep)
+            set children to every task of t
+            repeat with child in children
+                set completed of child to 1.0
+                set countUpdated to countUpdated + 1
+                set end of resultLines to "Updated: " & name of child
+                set grandchildren to every task of child
+                repeat with gc in grandchildren
+                    set completed of gc to 1.0
+                    set countUpdated to countUpdated + 1
+                    set end of resultLines to "Updated: " & name of gc
+                end repeat
+            end repeat
+        end if
+    end repeat
+    set AppleScript text item delimiters to return
+    return (countUpdated as string) & " tasks updated." & return & (resultLines as string)
+end tell'''
+    else:
+        script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    repeat with t in allTasks
+        if id of t = {tid} then
+            set completed of t to 1.0
+            return "Updated: " & name of t
+        end if
+    end repeat
+    return "Task not found: {tid}"
+end tell'''
+    return _run_as(script)
+
+
+def set_task_completed_by_name(task_name: str, include_subtree: bool = True) -> str:
+    """Set a task to 100% complete by name.
+
+    Args:
+        task_name: Name of the task to complete (case-sensitive exact match).
+        include_subtree: If True, recursively set all descendants to 100%.
+
+    Returns:
+        Summary of what was updated.
+    """
+    # Escape double quotes for AppleScript
+    safe_name = task_name.replace('"', '\\"')
+
+    if include_subtree:
+        script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    set countUpdated to 0
+    set resultLines to {{}}
+    repeat with t in allTasks
+        if name of t = "{safe_name}" then
+            set completed of t to 1.0
+            set countUpdated to countUpdated + 1
+            set end of resultLines to "Updated: " & name of t & " (GROUP)"
+            set children to every task of t
+            repeat with child in children
+                set completed of child to 1.0
+                set countUpdated to countUpdated + 1
+                set end of resultLines to "Updated: " & name of child
+                set grandchildren to every task of child
+                repeat with gc in grandchildren
+                    set completed of gc to 1.0
+                    set countUpdated to countUpdated + 1
+                    set end of resultLines to "Updated: " & name of gc
+                end repeat
+            end repeat
+        end if
+    end repeat
+    set AppleScript text item delimiters to return
+    return (countUpdated as string) & " tasks updated." & return & (resultLines as string)
+end tell'''
+    else:
+        script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    repeat with t in allTasks
+        if name of t = "{safe_name}" then
+            set completed of t to 1.0
+            return "Updated: " & name of t
+        end if
+    end repeat
+    return "Task not found: {safe_name}"
+end tell'''
+    return _run_as(script)
+
+
+def add_dependency(dependent_task_id: str, prerequisite_task_id: str) -> str:
+    """Add a finish-to-start dependency: dependent ← prerequisite.
+
+    Args:
+        dependent_task_id: The task that must wait (AppleScript numeric ID).
+        prerequisite_task_id: The task that must finish first.
+
+    Returns:
+        Confirmation message.
+    """
+    dep = dependent_task_id.lstrip("t")
+    pre = prerequisite_task_id.lstrip("t")
+    script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    set depTask to missing value
+    set preTask to missing value
+    repeat with t in allTasks
+        if id of t = {dep} then set depTask to t
+        if id of t = {pre} then set preTask to t
+    end repeat
+    if depTask is missing value then return "Error: dependent task {dep} not found"
+    if preTask is missing value then return "Error: prerequisite task {pre} not found"
+    depend depTask upon preTask
+    return "Added dependency: " & name of preTask & " → " & name of depTask
+end tell'''
+    return _run_as(script)
+
+
+def remove_dependency(dependent_task_id: str, prerequisite_task_id: str) -> str:
+    """Remove a dependency between two tasks.
+
+    Args:
+        dependent_task_id: The dependent task.
+        prerequisite_task_id: The prerequisite task to remove.
+
+    Returns:
+        Confirmation message.
+    """
+    dep = dependent_task_id.lstrip("t")
+    pre = prerequisite_task_id.lstrip("t")
+    script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    repeat with t in allTasks
+        if id of t = {dep} then
+            try
+                set prereqs to every prerequisite of t
+                repeat with p in prereqs
+                    set pTask to prerequisite task of p
+                    if id of pTask = {pre} then
+                        set pName to name of pTask
+                        delete p
+                        return "Removed dependency: " & pName & " → " & name of t
+                    end if
+                end repeat
+                return "Dependency not found"
+            on error e
+                return "Error: " & e
+            end try
+        end if
+    end repeat
+    return "Task {dep} not found"
+end tell'''
+    return _run_as(script)
+
+
+def set_task_duration(task_id: str, duration_seconds: int) -> str:
+    """Set a task's duration.
+
+    Args:
+        task_id: AppleScript numeric task ID.
+        duration_seconds: Duration in working seconds (28800 = 1 working day).
+
+    Returns:
+        Confirmation message.
+    """
+    tid = task_id.lstrip("t")
+    script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    repeat with t in allTasks
+        if id of t = {tid} then
+            set tname to name of t
+            set duration of t to {duration_seconds}
+            set durDays to round({duration_seconds} / 28800 * 10) / 10
+            return "Set " & tname & " duration to " & durDays & " days"
+        end if
+    end repeat
+    return "Task {tid} not found"
+end tell'''
+    return _run_as(script)
+
+
+def clear_constraint_date(task_id: str) -> str:
+    """Remove the starting constraint (locked start date) from a task.
+
+    Args:
+        task_id: AppleScript numeric task ID.
+
+    Returns:
+        Confirmation message.
+    """
+    tid = task_id.lstrip("t")
+    # Use evaluate javascript to avoid AppleScript keyword conflicts
+    script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    repeat with t in allTasks
+        if id of t = {tid} then
+            set tname to name of t
+            try
+                -- Use the cocoa key directly
+                set startConstraintDate of t to missing value
+            end try
+            try
+                set endConstraintDate of t to missing value
+            end try
+            return "Cleared constraint dates for: " & tname
+        end if
+    end repeat
+    return "Task {tid} not found"
+end tell'''
+    return _run_as(script)
+
+
+def rename_task(task_id: str, new_name: str) -> str:
+    """Rename a task.
+
+    Args:
+        task_id: AppleScript numeric task ID.
+        new_name: New name for the task.
+
+    Returns:
+        Confirmation message.
+    """
+    tid = task_id.lstrip("t")
+    safe_name = new_name.replace('"', '\\"')
+    script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    repeat with t in allTasks
+        if id of t = {tid} then
+            set oldName to name of t
+            set name of t to "{safe_name}"
+            return "Renamed: " & oldName & " → {safe_name}"
+        end if
+    end repeat
+    return "Task {tid} not found"
+end tell'''
+    return _run_as(script)
+
+
+def delete_task(task_id: str) -> str:
+    """Delete a task and all its children.
+
+    Args:
+        task_id: AppleScript numeric task ID.
+
+    Returns:
+        Confirmation message.
+    """
+    tid = task_id.lstrip("t")
+    script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    repeat with t in allTasks
+        if id of t = {tid} then
+            set tname to name of t
+            delete t
+            return "Deleted: " & tname
+        end if
+    end repeat
+    return "Task {tid} not found"
+end tell'''
+    return _run_as(script)
+
+
+def add_task(parent_task_id: str, task_name: str, duration_seconds: int = 28800) -> str:
+    """Add a new task under a parent group.
+
+    Args:
+        parent_task_id: AppleScript numeric task ID of the parent group.
+        task_name: Name for the new task.
+        duration_seconds: Duration in working seconds (default 1 day).
+
+    Returns:
+        Confirmation message.
+    """
+    pid = parent_task_id.lstrip("t")
+    safe_name = task_name.replace('"', '\\"')
+    script = f'''
+tell application "OmniPlan"
+    set doc to document 1
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    repeat with t in allTasks
+        if id of t = {pid} then
+            make new task at end of tasks of t with properties {{name:"{safe_name}", duration:{duration_seconds}}}
+            return "Added task: {safe_name} under " & name of t
+        end if
+    end repeat
+    return "Parent task {pid} not found"
+end tell'''
+    return _run_as(script)
+
+
+def save_document() -> str:
+    """Save the current OmniPlan document.
+
+    Returns:
+        Confirmation message.
+    """
+    script = '''
+tell application "OmniPlan"
+    try
+        save document 1
+        return "Document saved"
+    on error e
+        return "Save error: " & e
+    end try
+end tell'''
+    return _run_as(script)
