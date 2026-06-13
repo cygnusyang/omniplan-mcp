@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omniplan-mcp"
+version = "0.1.0"
+description = "MCP server for reading OmniPlan (.oplx) and Microsoft Project (.mpp) schedule files"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Cygnus Yang" }
+]
+keywords = ["mcp", "omniplan", "project-management", "microsoft-project", "schedule", "claude"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Scheduling",
+    "Topic :: Software Development :: Build Tools",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/cygnusnow/omniplan-mcp"
+Repository = "https://github.com/cygnusnow/omniplan-mcp"
+"Bug Tracker" = "https://github.com/cygnusnow/omniplan-mcp/issues"
+
+[project.scripts]
+omniplan-mcp = "omniplan_mcp.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
