@@ -2,10 +2,12 @@
 MCP server for OmniPlan project schedule files.
 
 Provides tools for reading, searching, and analyzing .mpp and .oplx files.
+macOS only — requires OmniPlan for .mpp files.
 """
 
+import json
 import os
-import shutil
+import sys
 from typing import Any
 
 from mcp.server import Server, NotificationOptions
@@ -15,17 +17,52 @@ import mcp.types as types
 
 from . import __version__
 from .parser import (
-    NS,
-    build_task_map,
-    convert_date,
-    get_text,
-    get_resources,
+    build_task_tree,
+    get_resources_staff,
     parse_file,
-    task_to_dict,
-    collect_all_tasks,
 )
 
 server = Server("omniplan-mcp")
+
+
+# ── Helper: format task tree ────────────────────────────────────────────
+
+
+def _format_tree(tasks: list[dict], level: int = 0, lines: list[str] | None = None) -> list[str]:
+    """Recursively format tasks as a tree."""
+    if lines is None:
+        lines = []
+
+    for t in tasks:
+        prefix = "  " * level
+        name = t.get("name", "")
+        ttype = t.get("task_type", "")
+
+        marker = "◇ " if ttype == "milestone" else ("▣ " if ttype == "group" else "  ")
+
+        start = t.get("start_date", "")
+        end = t.get("end_date", "")
+        pct = t.get("percent_complete", "")
+        effort = t.get("effort_hours", "")
+
+        parts = []
+        if start:
+            parts.append(str(start))
+        if end:
+            parts.append(f"→{end}")
+        if effort and float(effort) > 0:
+            parts.append(f"({effort}h)")
+        if pct:
+            parts.append(f"[{pct}%]")
+
+        info = " ".join(parts)
+        lines.append(f"{prefix}{marker}{name:50s} {info}")
+
+        children = t.get("children", [])
+        if children:
+            _format_tree(children, level + 1, lines)
+
+    return lines
 
 
 # ── Tool Definitions ──────────────────────────────────────────────────────
@@ -75,9 +112,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="list_resources",
-            description=(
-                "List all human resources (staff) in a project schedule."
-            ),
+            description="List all human resources (staff) in a project schedule.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -131,21 +166,28 @@ async def handle_list_tools() -> list[types.Tool]:
 
 
 @server.call_tool()
-async def handle_call_tool(
-    name: str, arguments: dict
-) -> list[types.TextContent]:
+async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    # Platform check — OmniPlan is macOS only
+    if sys.platform != "darwin":
+        return [
+            types.TextContent(
+                type="text",
+                text=(
+                    "This MCP server requires macOS. "
+                    "OmniPlan is only available on macOS."
+                ),
+            )
+        ]
+
     filepath = arguments.get("filepath", "")
 
     if not os.path.exists(filepath):
         return [
-            types.TextContent(
-                type="text", text=f"File not found: {filepath}"
-            )
+            types.TextContent(type="text", text=f"File not found: {filepath}")
         ]
 
-    cleanup_path = ""
     try:
-        root, cleanup_path = parse_file(filepath)
+        projects, resources, tasks = parse_file(filepath)
     except Exception as e:
         return [
             types.TextContent(
@@ -154,204 +196,86 @@ async def handle_call_tool(
             )
         ]
 
-    task_map = build_task_map(root)
-
-    try:
-        if name == "read_schedule":
-            fmt = arguments.get("format", "tree")
-            return _format_read_schedule(root, task_map, fmt)
-        elif name == "list_milestones":
-            return _format_milestones(task_map)
-        elif name == "list_resources":
-            return _format_resources(root)
-        elif name == "search_tasks":
-            keyword = arguments.get("keyword", "")
-            return _format_search(task_map, keyword)
-        elif name == "schedule_summary":
-            return _format_summary(root, task_map)
-        else:
-            return [
-                types.TextContent(
-                    type="text", text=f"Unknown tool: {name}"
-                )
-            ]
-    finally:
-        # Clean up temp export directory if created from .mpp
-        if cleanup_path and os.path.isdir(cleanup_path) and "tmp" in cleanup_path:
-            shutil.rmtree(cleanup_path, ignore_errors=True)
+    if name == "read_schedule":
+        fmt = arguments.get("format", "tree")
+        return _format_read_schedule(projects, tasks, fmt)
+    elif name == "list_milestones":
+        return _format_milestones(tasks)
+    elif name == "list_resources":
+        return _format_resources(resources)
+    elif name == "search_tasks":
+        keyword = arguments.get("keyword", "")
+        return _format_search(tasks, keyword)
+    elif name == "schedule_summary":
+        return _format_summary(projects, resources, tasks)
+    else:
+        return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
 # ── Output Formatters ─────────────────────────────────────────────────────
 
 
 def _format_read_schedule(
-    root: ET.Element, task_map: dict, fmt: str
+    projects: list[dict], tasks: list[dict], fmt: str
 ) -> list[types.TextContent]:
     """Format the full schedule output."""
     if fmt == "json":
-        return _format_json_schedule(task_map)
-    elif fmt == "flat":
-        return _format_flat_schedule(task_map)
+        return [
+            types.TextContent(
+                type="text",
+                text=json.dumps(tasks, indent=2, ensure_ascii=False),
+            )
+        ]
 
-    return _format_tree_schedule(root, task_map)
-
-
-def _find_root_task(task_map: dict) -> str | None:
-    """Find the root task ID (unnamed top-level group)."""
-    for tid, task in task_map.items():
-        title = get_text(task, "title")
-        if not title and task.find(f"{NS}child-task") is not None:
-            return tid
-    return None
-
-
-def _format_tree_schedule(
-    root: ET.Element, task_map: dict
-) -> list[types.TextContent]:
-    """Format as hierarchical tree."""
     lines = []
 
-    # Project start date
-    start_date = get_text(root, "start-date")
-    if start_date:
-        lines.append(f"📅 Project Start: {convert_date(start_date)}")
+    # Project info
+    if projects:
+        p = projects[0]
+        lines.append(f"\U0001f4ca {p.get('title', 'Untitled')}")
+        if p.get("start_date"):
+            lines.append(f"\U0001f4c5 Start: {p['start_date']} → End: {p.get('end_date', '')}")
+            if p.get("percent_complete"):
+                lines.append(f"\U0001f4c8 Overall: {p['percent_complete']:.1f}%")
+        lines.append("")
 
     # Stats
-    total = len(task_map)
-    milestones = sum(
-        1 for t in task_map.values() if get_text(t, "type") == "milestone"
-    )
-    groups = sum(
-        1 for t in task_map.values() if get_text(t, "type") == "group"
-    )
-    lines.append(
-        f"📋 Tasks: {total} total ({groups} groups, {milestones} milestones)"
-    )
+    total = len(tasks)
+    milestones = sum(1 for t in tasks if t["task_type"] == "milestone")
+    groups = sum(1 for t in tasks if t["task_type"] == "group")
+    lines.append(f"\U0001f4cb Tasks: {total} total ({groups} groups, {milestones} milestones)")
     lines.append("")
 
-    tree_lines: list[str] = []
-
-    def print_task(tid: str, level: int = 0) -> None:
-        if tid not in task_map:
-            return
-        task = task_map[tid]
-        title = get_text(task, "title")
-        ttype = get_text(task, "type")
-        prefix = "  " * level
-
-        # Skip unnamed root
-        if not title and tid == _find_root_task(task_map):
-            for child in task:
-                tag = (
-                    child.tag.split("}")[1]
-                    if "}" in child.tag
-                    else child.tag
-                )
-                if tag == "child-task":
-                    print_task(child.get("idref", ""), level)
-            return
-
-        start = convert_date(get_text(task, "start-date"))
-        end = convert_date(get_text(task, "end-date"))
-        pct = get_text(task, "percent-complete")
-        effort = get_text(task, "effort")
-
-        if ttype == "milestone":
-            marker = "◇ "
-        elif ttype == "group":
-            marker = "▣ "
-        else:
-            marker = "  "
-
-        parts = []
-        if start:
-            parts.append(start)
-        if end:
-            parts.append(f"→{end}")
-        if effort:
-            parts.append(f"({effort}h)")
-        if pct:
-            parts.append(f"[{pct}%]")
-
-        info = " ".join(parts)
-        tree_lines.append(f"{prefix}{marker}{title:50s} {info}")
-
-        for child in task:
-            tag = (
-                child.tag.split("}")[1]
-                if "}" in child.tag
-                else child.tag
-            )
-            if tag == "child-task":
-                print_task(child.get("idref", ""), level + 1)
-
-    root_id = _find_root_task(task_map)
-    if root_id:
-        print_task(root_id)
+    if fmt == "flat":
+        for t in tasks:
+            name = t.get("name", "")
+            if not name:
+                continue
+            marker = "◇ " if t["task_type"] == "milestone" else ("▣ " if t["task_type"] == "group" else "  ")
+            start = t.get("start_date", "")
+            end = t.get("end_date", "")
+            pct = t.get("percent_complete", "")
+            pct_str = f" [{pct}%]" if pct else ""
+            lines.append(f"  {marker}{name:50s} {start}→{end}{pct_str}")
     else:
-        # Print all top-level tasks
-        for task in root.findall(f".//{NS}task"):
-            if get_text(task, "title"):
-                print_task(task.get("id", ""))
-
-    lines.extend(tree_lines)
-    return [types.TextContent(type="text", text="\n".join(lines))]
-
-
-def _format_flat_schedule(task_map: dict) -> list[types.TextContent]:
-    """Format as flat task list."""
-    lines = ["📋 All Tasks (flat view)", "=" * 80]
-
-    for tid, task in task_map.items():
-        title = get_text(task, "title")
-        if not title:
-            continue
-        ttype = get_text(task, "type")
-        start = convert_date(get_text(task, "start-date"))
-        end = convert_date(get_text(task, "end-date"))
-        pct = get_text(task, "percent-complete")
-
-        marker = (
-            "◇ "
-            if ttype == "milestone"
-            else ("▣ " if ttype == "group" else "  ")
-        )
-        pct_str = f" [{pct}%]" if pct else ""
-        lines.append(f"  {marker}{title:50s} {start}→{end}{pct_str}")
+        tree = build_task_tree(tasks)
+        _format_tree(tree, 0, lines)
 
     return [types.TextContent(type="text", text="\n".join(lines))]
 
 
-def _format_json_schedule(task_map: dict) -> list[types.TextContent]:
-    """Format as JSON."""
-    import json
-
-    all_tasks = []
-    for tid, task in task_map.items():
-        title = get_text(task, "title")
-        if title:
-            all_tasks.append(task_to_dict(task))
-
-    return [
-        types.TextContent(
-            type="text", text=json.dumps(all_tasks, indent=2, ensure_ascii=False)
-        )
-    ]
-
-
-def _format_milestones(task_map: dict) -> list[types.TextContent]:
+def _format_milestones(tasks: list[dict]) -> list[types.TextContent]:
     """Format milestone list."""
     lines = ["◇ Milestones", "=" * 60]
 
-    for task in task_map.values():
-        ttype = get_text(task, "type")
-        if ttype == "milestone":
-            title = get_text(task, "title")
-            start = convert_date(get_text(task, "start-date"))
-            end = convert_date(get_text(task, "end-date"))
-            pct = get_text(task, "percent-complete")
+    for t in tasks:
+        if t["task_type"] == "milestone":
+            name = t.get("name", "")
+            start = t.get("start_date", "")
+            end = t.get("end_date", "")
+            pct = t.get("percent_complete", "")
             pct_str = f" [{pct}%]" if pct else ""
-            lines.append(f"  ◇ {title:50s} {start}→{end}{pct_str}")
+            lines.append(f"  ◇ {name:50s} {start}→{end}{pct_str}")
 
     if len(lines) == 1:
         lines.append("  (no milestones found)")
@@ -359,114 +283,110 @@ def _format_milestones(task_map: dict) -> list[types.TextContent]:
     return [types.TextContent(type="text", text="\n".join(lines))]
 
 
-def _format_resources(root: ET.Element) -> list[types.TextContent]:
+def _format_resources(resources: list[dict]) -> list[types.TextContent]:
     """Format resource list."""
-    resources = get_resources(root)
-    lines = [
-        f"👤 Resources ({len(resources)})",
-        "=" * 60,
-    ]
-    for r in resources:
-        lines.append(f"  👤 {r['name']}")
+    staff = get_resources_staff(resources)
+    lines = [f"\U0001f464 Resources ({len(staff)})", "=" * 60]
+    for r in staff:
+        lines.append(f"  \U0001f464 {r['name']}")
 
-    if not resources:
+    if not staff:
         lines.append("  (no staff resources found)")
 
     return [types.TextContent(type="text", text="\n".join(lines))]
 
 
-def _format_search(task_map: dict, keyword: str) -> list[types.TextContent]:
+def _format_search(tasks: list[dict], keyword: str) -> list[types.TextContent]:
     """Format search results."""
     keyword_lower = keyword.lower()
-    lines = [f"🔍 Search results for '{keyword}'", "=" * 60]
+    lines = [f"\U0001f50d Search results for '{keyword}'", "=" * 60]
 
     found = 0
-    for task in task_map.values():
-        title = get_text(task, "title")
-        if title and keyword_lower in title.lower():
+    for t in tasks:
+        name = t.get("name", "")
+        if name and keyword_lower in name.lower():
             found += 1
-            ttype = get_text(task, "type")
-            start = convert_date(get_text(task, "start-date"))
-            end = convert_date(get_text(task, "end-date"))
-            pct = get_text(task, "percent-complete")
-
-            marker = (
-                "◇ "
-                if ttype == "milestone"
-                else ("▣ " if ttype == "group" else "  ")
-            )
+            marker = "◇ " if t["task_type"] == "milestone" else ("▣ " if t["task_type"] == "group" else "  ")
+            start = t.get("start_date", "")
+            end = t.get("end_date", "")
+            pct = t.get("percent_complete", "")
             pct_str = f" [{pct}%]" if pct else ""
-            lines.append(
-                f"  {marker}{title:50s} {start}→{end}{pct_str}"
-            )
+            lines.append(f"  {marker}{name:50s} {start}→{end}{pct_str}")
 
     lines.append(f"\nFound {found} matching tasks")
     return [types.TextContent(type="text", text="\n".join(lines))]
 
 
 def _format_summary(
-    root: ET.Element, task_map: dict
+    projects: list[dict], resources: list[dict], tasks: list[dict]
 ) -> list[types.TextContent]:
     """Format project summary."""
-    lines = ["📊 Project Schedule Summary", "=" * 60]
+    lines = ["\U0001f4ca Project Schedule Summary", "=" * 60]
 
-    # Project dates
-    start_date = get_text(root, "start-date")
-    if start_date:
-        lines.append(f"📅 Project Start: {convert_date(start_date)}")
+    if projects:
+        p = projects[0]
+        lines.append(f"\U0001f4c5 Project: {p.get('title', 'Untitled')}")
+        if p.get("start_date"):
+            lines.append(f"   Start: {p['start_date']}")
+        if p.get("end_date"):
+            lines.append(f"   End:   {p['end_date']}")
+        if p.get("percent_complete"):
+            lines.append(f"   Overall Progress: {p['percent_complete']:.1f}%")
 
-    # Resource count
-    resources = get_resources(root)
-    lines.append(f"👤 Resources: {len(resources)} staff")
+    staff = get_resources_staff(resources)
+    lines.append(f"\U0001f464 Resources: {len(staff)} staff")
 
-    # Task counts
-    total = len(task_map)
-    milestones = sum(
-        1 for t in task_map.values() if get_text(t, "type") == "milestone"
-    )
-    groups = sum(
-        1 for t in task_map.values() if get_text(t, "type") == "group"
-    )
-    tasks_with_pct = sum(
-        1 for t in task_map.values() if get_text(t, "percent-complete")
-    )
+    total = len(tasks)
+    milestones = sum(1 for t in tasks if t["task_type"] == "milestone")
+    groups = sum(1 for t in tasks if t["task_type"] == "group")
+    tasks_only = sum(1 for t in tasks if t["task_type"] == "task")
 
-    lines.append(f"\n📋 Total tasks: {total}")
+    lines.append(f"\n\U0001f4cb Total tasks: {total}")
     lines.append(f"   • Groups: {groups}")
+    lines.append(f"   • Tasks: {tasks_only}")
     lines.append(f"   • Milestones: {milestones}")
-    lines.append(f"   • Tasks with progress: {tasks_with_pct}")
 
-    # Progress distribution
-    completed = sum(
-        1 for t in task_map.values()
-        if get_text(t, "percent-complete") == "100"
-    )
-    in_progress_count = sum(
-        1 for t in task_map.values()
-        if get_text(t, "percent-complete")
-        and get_text(t, "percent-complete") != "100"
-        and get_text(t, "percent-complete") != "0"
-    )
-    not_started = sum(
-        1 for t in task_map.values()
-        if get_text(t, "type") not in ("group", "milestone")
-        and not get_text(t, "percent-complete")
-    )
+    completed = sum(1 for t in tasks if t["task_type"] == "task" and t.get("percent_complete", 0) >= 100)
+    in_progress_count = sum(1 for t in tasks if t["task_type"] == "task" and 0 < t.get("percent_complete", 0) < 100)
+    not_started = sum(1 for t in tasks if t["task_type"] == "task" and t.get("percent_complete", 0) == 0)
 
-    lines.append(f"\n📈 Progress:")
+    lines.append(f"\n\U0001f4c8 Progress (tasks only):")
     lines.append(f"   ✅ Completed: {completed}")
-    lines.append(f"   🔄 In Progress: {in_progress_count}")
+    lines.append(f"   \U0001f504 In Progress: {in_progress_count}")
     lines.append(f"   ⏳ Not Started: {not_started}")
 
-    # Phase summary (top-level groups)
-    lines.append(f"\n📋 Phases:")
-    for task in task_map.values():
-        ttype = get_text(task, "type")
-        if ttype == "group":
-            title = get_text(task, "title")
-            if title:
-                start = convert_date(get_text(task, "start-date"))
-                end = convert_date(get_text(task, "end-date"))
-                lines.append(f"  ▣ {title:45s} {start}→{end}")
+    lines.append(f"\n\U0001f4cb Phases:")
+    for t in tasks:
+        if t["task_type"] == "group" and t.get("outline_depth", 0) == 1:
+            name = t.get("name", "")
+            start = t.get("start_date", "")
+            end = t.get("end_date", "")
+            pct = t.get("percent_complete", "")
+            pct_str = f" [{pct}%]" if pct else ""
+            lines.append(f"  ▣ {name:45s} {start}→{end}{pct_str}")
 
     return [types.TextContent(type="text", text="\n".join(lines))]
+
+
+# ── Main ───────────────────────────────────────────────────────────────────
+
+
+async def main():
+    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            InitializationOptions(
+                server_name="omniplan-mcp",
+                server_version=__version__,
+                capabilities=server.get_capabilities(
+                    notification_options=NotificationOptions(),
+                    experimental_capabilities={},
+                ),
+            ),
+        )
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
