@@ -106,18 +106,50 @@ tell application "OmniPlan"
         set projEndStr to ""
     end try
     set projPct to completed of sce
-    set end of output to "project|" & projTitle & "|" & projStartStr & "|" & projEndStr & "|" & projPct
+    set projDur to duration of sce
+    set projEff to effort of sce
+    set projCost to total cost of sce
+    set projViolations to violation count of sce
+    try
+        set projGran to scheduling granularity of sce
+    on error
+        set projGran to ""
+    end try
+    set end of output to "project|" & projTitle & "|" & projStartStr & "|" & projEndStr & "|" & projPct & "|" & projDur & "|" & projEff & "|" & projCost & "|" & projViolations & "|" & projGran
 
-    -- Resources
+    -- Resources (ALL properties)
     set allResources to every resource of sce
     repeat with r in allResources
         set rid to id of r
         set rname to name of r
         set rtype to resource type of r
-        set end of output to "resource|" & rid & "|" & rname & "|" & rtype
+        set rdepth to outline depth of r
+        set rnum to number of r
+        set reff to efficiency of r
+        set rcpu to cost per use of r
+        set rcph to cost per hour of r
+        set rtuses to total uses of r
+        set rtsec to total seconds of r
+        set rtcost to total cost of r
+        try
+            set remail to email address of r
+        on error
+            set remail to ""
+        end try
+        try
+            set rnote to note of r
+        on error
+            set rnote to ""
+        end try
+        try
+            set rexp to expanded of r
+        on error
+            set rexp to ""
+        end try
+        set end of output to "resource|" & rid & "|" & rname & "|" & rtype & "|" & rdepth & "|" & rnum & "|" & reff & "|" & rcpu & "|" & rcph & "|" & rtuses & "|" & rtsec & "|" & rtcost & "|" & remail & "|" & rnote & "|" & rexp
     end repeat
 
-    -- All tasks (full hierarchy)
+    -- All tasks (ALL properties)
     set allTasks to every task of sce
     repeat with t in allTasks
         set tid to id of t
@@ -136,6 +168,8 @@ tell application "OmniPlan"
         set tdur to duration of t
         set tpct to completed of t
         set teff to effort of t
+        set treff to remaining effort of t
+        set tceff to completed effort of t
         set tdepth to outline depth of t
         set tnum to outline number of t
 
@@ -145,8 +179,76 @@ tell application "OmniPlan"
         end try
 
         set tpri to priority of t
+        set tstat to task status of t
+        set tscost to static cost of t
+        set trcost to resource cost of t
+        set ttcost to total cost of t
+        try
+            set tnote to note of t
+        on error
+            set tnote to ""
+        end try
 
-        set end of output to "task|" & tid & "|" & tname & "|" & ttype & "|" & tstart & "|" & tend & "|" & tdur & "|" & tpct & "|" & teff & "|" & tdepth & "|" & tnum & "|" & tparent & "|" & tpri
+        set tchilds to 0
+        try
+            set tchilds to count of (every task of t)
+        end try
+        set tasgns to 0
+        try
+            set tasgns to count of (every assignment of t)
+        end try
+        set tpres to 0
+        try
+            set tpres to count of (every prerequisite of t)
+        end try
+        set tdep to 0
+        try
+            set tdep to count of (every dependent of t)
+        end try
+
+        set end of output to "task|" & tid & "|" & tname & "|" & ttype & "|" & tstart & "|" & tend & "|" & tdur & "|" & tpct & "|" & teff & "|" & treff & "|" & tceff & "|" & tdepth & "|" & tnum & "|" & tparent & "|" & tpri & "|" & tstat & "|" & tscost & "|" & trcost & "|" & ttcost & "|" & tnote & "|" & tchilds & "|" & tasgns & "|" & tpres & "|" & tdep
+    end repeat
+
+    -- Violations
+    try
+        set allViolations to every violation of sce
+        repeat with v in allViolations
+            set vt to violation type of v
+            set vdesc to short description of v
+            set vhtml to html of v
+            try
+                set vtid to id of task of v
+            on error
+                set vtid to -1
+            end try
+            set end of output to "violation|" & vt & "|" & vdesc & "|" & vhtml & "|" & vtid
+        end repeat
+    end try
+
+    -- Assignments (sample: only tasks with assignments)
+    repeat with t in allTasks
+        try
+            set assigns to every assignment of t
+            if (count of assigns) > 0 then
+                repeat with a in assigns
+                    set rid_asgn to id of resource of a
+                    set end of output to "assignment|" & tid & "|" & rid_asgn
+                end repeat
+            end if
+        end try
+    end repeat
+
+    -- Dependencies (sample: only tasks with prerequisites)
+    repeat with t in allTasks
+        try
+            set prereqs to every prerequisite of t
+            if (count of prereqs) > 0 then
+                repeat with p in prereqs
+                    set pid to id of prerequisite task of p
+                    set end of output to "dependency|" & tid & "|" & pid
+                end repeat
+            end if
+        end try
     end repeat
 
     set AppleScript's text item delimiters to {return}
@@ -236,14 +338,14 @@ def read_apple_data() -> tuple[list[dict], list[dict], list[dict]]:
     return _parse_lines(raw)
 
 
-def read_mpp(filepath: str) -> tuple[list[dict], list[dict], list[dict]]:
+def read_mpp(filepath: str) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict], list[dict]]:
     """Read a .mpp file via AppleScript (opens in OmniPlan, reads, closes).
 
     Uses macOS 'open' command to open the file (which avoids OmniPlan's
     AppleScript 'open' command bug), then reads via AppleScript.
 
     Returns:
-        Tuple of (project_info, resources, tasks).
+        Tuple of (project_info, resources, tasks, violations, assignments, dependencies).
     """
     abs_path = os.path.abspath(filepath)
 
@@ -267,11 +369,16 @@ def read_mpp(filepath: str) -> tuple[list[dict], list[dict], list[dict]]:
         )
 
 
-def _parse_lines(raw: str) -> tuple[list[dict], list[dict], list[dict]]:
+def _parse_lines(
+    raw: str,
+) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict], list[dict]]:
     """Parse AppleScript output lines into structured records."""
     projects = []
     resources = []
     tasks = []
+    violations = []
+    assignments = []
+    dependencies = []
 
     for line in raw.split("\n"):
         line = line.strip()
@@ -285,18 +392,24 @@ def _parse_lines(raw: str) -> tuple[list[dict], list[dict], list[dict]]:
             resources.append(record)
         elif t == "task":
             tasks.append(record)
+        elif t == "violation":
+            violations.append(record)
+        elif t == "assignment":
+            assignments.append(record)
+        elif t == "dependency":
+            dependencies.append(record)
 
-    return projects, resources, tasks
+    return projects, resources, tasks, violations, assignments, dependencies
 
 
 # ── .oplx XML Parsing (kept for files without OmniPlan) ────────────────
 
 
-def read_oplx(filepath: str) -> tuple[list[dict], list[dict], list[dict]]:
+def read_oplx(filepath: str) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict], list[dict]]:
     """Read an .oplx file via direct XML parsing.
 
     Returns:
-        Tuple of (project_info, resources, tasks).
+        Tuple of (project_info, resources, tasks, violations, assignments, dependencies).
     """
     if os.path.isdir(filepath):
         return _parse_oplx_dir(filepath)
@@ -320,7 +433,7 @@ def _convert_iso_date(d: str) -> str:
         return d[:10] if len(d) >= 10 else d
 
 
-def _parse_oplx_zip(filepath: str) -> tuple[list[dict], list[dict], list[dict]]:
+def _parse_oplx_zip(filepath: str) -> tuple[list[dict], list[dict], list[dict], list, list, list]:
     """Parse .oplx ZIP file."""
     with zipfile.ZipFile(filepath) as z:
         names = z.namelist()
@@ -337,7 +450,7 @@ def _parse_oplx_zip(filepath: str) -> tuple[list[dict], list[dict], list[dict]]:
     return _parse_xml_content(target)
 
 
-def _parse_oplx_dir(dirpath: str) -> tuple[list[dict], list[dict], list[dict]]:
+def _parse_oplx_dir(dirpath: str) -> tuple[list[dict], list[dict], list[dict], list, list, list]:
     """Parse .oplx directory export."""
     candidates = []
     for f in os.listdir(dirpath):
@@ -353,7 +466,7 @@ def _parse_oplx_dir(dirpath: str) -> tuple[list[dict], list[dict], list[dict]]:
         return _parse_xml_content(f.read())
 
 
-def _parse_xml_content(content: str) -> tuple[list[dict], list[dict], list[dict]]:
+def _parse_xml_content(content: str) -> tuple[list[dict], list[dict], list[dict], list, list, list]:
     """Parse XML content into structured records."""
     root = ET.fromstring(content)
 
@@ -429,20 +542,22 @@ def _parse_xml_content(content: str) -> tuple[list[dict], list[dict], list[dict]
                         task_map[tid]["parent_id"] = parent.get("id", "")
                         break
 
-    return projects, resources, tasks
+    return projects, resources, tasks, [], [], []
 
 
 # ── Unified API ─────────────────────────────────────────────────────────
 
 
-def parse_file(filepath: str) -> tuple[list[dict], list[dict], list[dict]]:
+def parse_file(
+    filepath: str,
+) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict], list[dict]]:
     """Parse a project schedule file (.mpp or .oplx).
 
     Args:
         filepath: Path to the schedule file.
 
     Returns:
-        Tuple of (project_info, resources, tasks).
+        Tuple of (project_info, resources, tasks, violations, assignments, dependencies).
 
     Raises:
         ValueError: If file format is unsupported.

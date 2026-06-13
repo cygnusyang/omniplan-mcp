@@ -116,7 +116,7 @@ cd "$INSTALL_DIR"
 # ── Step 6: Install dependencies ────────────────────────
 info "Installing Python dependencies..."
 if command -v uv &>/dev/null; then
-    $PYTHON -m uv sync 2>/dev/null || $PYTHON -m pip install -e . 2>/dev/null || {
+    uv sync 2>/dev/null || $PYTHON -m pip install -e . 2>/dev/null || {
         warn "uv sync failed, falling back to pip..."
         $PYTHON -m pip install -e .
     }

@@ -65,6 +65,18 @@ def _format_tree(tasks: list[dict], level: int = 0, lines: list[str] | None = No
     return lines
 
 
+def _status_icon(status: str) -> str:
+    """Map task status to an icon."""
+    mapping = {
+        "ok": "✅",
+        "close to due date": "⚠️",
+        "due now": "🔴",
+        "past due": "🔴",
+        "finished": "✅",
+    }
+    return mapping.get(status, "❓")
+
+
 # ── Tool Definitions ──────────────────────────────────────────────────────
 
 
@@ -112,14 +124,19 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="list_resources",
-            description="List all human resources (staff) in a project schedule.",
+            description="List all human resources (staff) with details (cost, hours, efficiency).",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "filepath": {
                         "type": "string",
                         "description": "Absolute path to the .mpp or .oplx file",
-                    }
+                    },
+                    "detail": {
+                        "type": "string",
+                        "enum": ["simple", "full"],
+                        "description": "simple = names only, full = with cost/hours/efficiency",
+                    },
                 },
                 "required": ["filepath"],
             },
@@ -159,6 +176,88 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["filepath"],
             },
         ),
+        types.Tool(
+            name="get_task_detail",
+            description="Get detailed information about a specific task by name or ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Absolute path to the .mpp or .oplx file",
+                    },
+                    "task_id": {
+                        "type": "integer",
+                        "description": "Task ID (integer, from OmniPlan internal id)",
+                    },
+                    "task_name": {
+                        "type": "string",
+                        "description": "Task name to search for (case-insensitive partial match)",
+                    },
+                },
+                "required": ["filepath"],
+            },
+        ),
+        types.Tool(
+            name="get_resource_detail",
+            description="Get detailed information about a specific resource by name.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Absolute path to the .mpp or .oplx file",
+                    },
+                    "resource_name": {
+                        "type": "string",
+                        "description": "Resource name (case-insensitive partial match)",
+                    },
+                },
+                "required": ["filepath", "resource_name"],
+            },
+        ),
+        types.Tool(
+            name="list_violations",
+            description="List all scheduling violations/conflicts in the project.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Absolute path to the .mpp or .oplx file",
+                    }
+                },
+                "required": ["filepath"],
+            },
+        ),
+        types.Tool(
+            name="list_assignments",
+            description="List all resource-to-task assignments in the project.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Absolute path to the .mpp or .oplx file",
+                    }
+                },
+                "required": ["filepath"],
+            },
+        ),
+        types.Tool(
+            name="list_dependencies",
+            description="List all task dependency relationships (prerequisite/successor chains).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Absolute path to the .mpp or .oplx file",
+                    }
+                },
+                "required": ["filepath"],
+            },
+        ),
     ]
 
 
@@ -167,15 +266,12 @@ async def handle_list_tools() -> list[types.Tool]:
 
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    # Platform check — OmniPlan is macOS only
+    # Platform check
     if sys.platform != "darwin":
         return [
             types.TextContent(
                 type="text",
-                text=(
-                    "This MCP server requires macOS. "
-                    "OmniPlan is only available on macOS."
-                ),
+                text="This MCP server requires macOS. OmniPlan is only available on macOS.",
             )
         ]
 
@@ -187,7 +283,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         ]
 
     try:
-        projects, resources, tasks = parse_file(filepath)
+        projects, resources, tasks, violations, assignments, dependencies = parse_file(filepath)
     except Exception as e:
         return [
             types.TextContent(
@@ -202,14 +298,39 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
     elif name == "list_milestones":
         return _format_milestones(tasks)
     elif name == "list_resources":
-        return _format_resources(resources)
+        detail = arguments.get("detail", "simple")
+        return _format_resources(resources, detail)
     elif name == "search_tasks":
         keyword = arguments.get("keyword", "")
         return _format_search(tasks, keyword)
     elif name == "schedule_summary":
-        return _format_summary(projects, resources, tasks)
+        return _format_summary(projects, resources, tasks, violations)
+    elif name == "get_task_detail":
+        task_id = arguments.get("task_id")
+        task_name = arguments.get("task_name", "")
+        return _format_task_detail(tasks, task_id, task_name)
+    elif name == "get_resource_detail":
+        rname = arguments.get("resource_name", "")
+        return _format_resource_detail(resources, rname)
+    elif name == "list_violations":
+        return _format_violations(violations, tasks)
+    elif name == "list_assignments":
+        return _format_assignments(assignments, tasks, resources)
+    elif name == "list_dependencies":
+        return _format_dependencies(dependencies, tasks)
     else:
         return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
+
+
+# ── Helper: build task name map ─────────────────────────────────────────
+
+
+def _task_name_map(tasks: list[dict]) -> dict[int, str]:
+    return {t["id"]: t.get("name", f"Task #{t['id']}") for t in tasks}
+
+
+def _resource_name_map(resources: list[dict]) -> dict[int, str]:
+    return {r["id"]: r.get("name", f"Resource #{r['id']}") for r in resources}
 
 
 # ── Output Formatters ─────────────────────────────────────────────────────
@@ -218,7 +339,6 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 def _format_read_schedule(
     projects: list[dict], tasks: list[dict], fmt: str
 ) -> list[types.TextContent]:
-    """Format the full schedule output."""
     if fmt == "json":
         return [
             types.TextContent(
@@ -229,7 +349,6 @@ def _format_read_schedule(
 
     lines = []
 
-    # Project info
     if projects:
         p = projects[0]
         lines.append(f"\U0001f4ca {p.get('title', 'Untitled')}")
@@ -237,9 +356,10 @@ def _format_read_schedule(
             lines.append(f"\U0001f4c5 Start: {p['start_date']} → End: {p.get('end_date', '')}")
             if p.get("percent_complete"):
                 lines.append(f"\U0001f4c8 Overall: {p['percent_complete']:.1f}%")
+        if p.get("violation_count"):
+            lines.append(f"⚠️ Violations: {p['violation_count']}")
         lines.append("")
 
-    # Stats
     total = len(tasks)
     milestones = sum(1 for t in tasks if t["task_type"] == "milestone")
     groups = sum(1 for t in tasks if t["task_type"] == "group")
@@ -265,9 +385,7 @@ def _format_read_schedule(
 
 
 def _format_milestones(tasks: list[dict]) -> list[types.TextContent]:
-    """Format milestone list."""
     lines = ["◇ Milestones", "=" * 60]
-
     for t in tasks:
         if t["task_type"] == "milestone":
             name = t.get("name", "")
@@ -276,31 +394,35 @@ def _format_milestones(tasks: list[dict]) -> list[types.TextContent]:
             pct = t.get("percent_complete", "")
             pct_str = f" [{pct}%]" if pct else ""
             lines.append(f"  ◇ {name:50s} {start}→{end}{pct_str}")
-
     if len(lines) == 1:
         lines.append("  (no milestones found)")
-
     return [types.TextContent(type="text", text="\n".join(lines))]
 
 
-def _format_resources(resources: list[dict]) -> list[types.TextContent]:
-    """Format resource list."""
+def _format_resources(resources: list[dict], detail: str = "simple") -> list[types.TextContent]:
     staff = get_resources_staff(resources)
     lines = [f"\U0001f464 Resources ({len(staff)})", "=" * 60]
-    for r in staff:
-        lines.append(f"  \U0001f464 {r['name']}")
+
+    if detail == "full":
+        for r in staff:
+            name = r.get("name", "")
+            rtype = r.get("resource_type", "")
+            hrs = round(r.get("total_seconds", 0) / 3600, 1)
+            cost = r.get("total_cost", 0)
+            eff = r.get("efficiency", 1.0)
+            lines.append(f"  \U0001f464 {name:25s} type={rtype}  hours={hrs}h  cost=\${cost}  efficiency={eff*100:.0f}%")
+    else:
+        for r in staff:
+            lines.append(f"  \U0001f464 {r['name']}")
 
     if not staff:
         lines.append("  (no staff resources found)")
-
     return [types.TextContent(type="text", text="\n".join(lines))]
 
 
 def _format_search(tasks: list[dict], keyword: str) -> list[types.TextContent]:
-    """Format search results."""
     keyword_lower = keyword.lower()
     lines = [f"\U0001f50d Search results for '{keyword}'", "=" * 60]
-
     found = 0
     for t in tasks:
         name = t.get("name", "")
@@ -310,17 +432,17 @@ def _format_search(tasks: list[dict], keyword: str) -> list[types.TextContent]:
             start = t.get("start_date", "")
             end = t.get("end_date", "")
             pct = t.get("percent_complete", "")
+            status = t.get("task_status", "")
+            icon = _status_icon(status)
             pct_str = f" [{pct}%]" if pct else ""
-            lines.append(f"  {marker}{name:50s} {start}→{end}{pct_str}")
-
+            lines.append(f"  {icon} {marker}{name:50s} {start}→{end}{pct_str}")
     lines.append(f"\nFound {found} matching tasks")
     return [types.TextContent(type="text", text="\n".join(lines))]
 
 
 def _format_summary(
-    projects: list[dict], resources: list[dict], tasks: list[dict]
+    projects: list[dict], resources: list[dict], tasks: list[dict], violations: list[dict]
 ) -> list[types.TextContent]:
-    """Format project summary."""
     lines = ["\U0001f4ca Project Schedule Summary", "=" * 60]
 
     if projects:
@@ -332,6 +454,14 @@ def _format_summary(
             lines.append(f"   End:   {p['end_date']}")
         if p.get("percent_complete"):
             lines.append(f"   Overall Progress: {p['percent_complete']:.1f}%")
+        if p.get("duration_seconds"):
+            days = round(p["duration_seconds"] / 28800, 1)
+            lines.append(f"   Duration: {days} working days")
+        if p.get("effort_seconds"):
+            hrs = round(p["effort_seconds"] / 3600, 1)
+            lines.append(f"   Total Effort: {hrs} person-hours")
+        if p.get("violation_count"):
+            lines.append(f"   ⚠️ Violations: {p['violation_count']}")
 
     staff = get_resources_staff(resources)
     lines.append(f"\U0001f464 Resources: {len(staff)} staff")
@@ -355,6 +485,10 @@ def _format_summary(
     lines.append(f"   \U0001f504 In Progress: {in_progress_count}")
     lines.append(f"   ⏳ Not Started: {not_started}")
 
+    past_due = sum(1 for t in tasks if t.get("task_status") == "past due")
+    if past_due:
+        lines.append(f"   🔴 Past Due: {past_due}")
+
     lines.append(f"\n\U0001f4cb Phases:")
     for t in tasks:
         if t["task_type"] == "group" and t.get("outline_depth", 0) == 1:
@@ -364,6 +498,137 @@ def _format_summary(
             pct = t.get("percent_complete", "")
             pct_str = f" [{pct}%]" if pct else ""
             lines.append(f"  ▣ {name:45s} {start}→{end}{pct_str}")
+
+    return [types.TextContent(type="text", text="\n".join(lines))]
+
+
+def _format_task_detail(tasks: list[dict], task_id: int | None, task_name: str) -> list[types.TextContent]:
+    """Format detailed info for a specific task."""
+    matches = []
+    for t in tasks:
+        if task_id is not None and t["id"] == task_id:
+            matches.append(t)
+            break
+        if task_name and task_name.lower() in t.get("name", "").lower():
+            matches.append(t)
+
+    if not matches:
+        return [types.TextContent(type="text", text=f"No task found matching id={task_id} name='{task_name}'")]
+
+    results = []
+    for t in matches:
+        lines = [f"\U0001f4cb Task Detail: {t.get('name', '')}", "=" * 60]
+        lines.append(f"  ID:             {t['id']}")
+        lines.append(f"  Type:           {t['task_type']}")
+        lines.append(f"  Status:         {_status_icon(t.get('task_status', ''))} {t.get('task_status', 'N/A')}")
+        lines.append(f"  WBS:            {t.get('outline_number', '')}")
+        lines.append(f"  Level:          {t.get('outline_depth', '')}")
+        lines.append(f"  Start:          {t.get('start_date', 'N/A')}")
+        lines.append(f"  End:            {t.get('end_date', 'N/A')}")
+        lines.append(f"  Duration:       {t.get('duration_days', '0')} days")
+        lines.append(f"  Progress:       {t.get('percent_complete', 0)}%")
+        lines.append(f"  Effort:         {t.get('effort_hours', '0')}h")
+        lines.append(f"  Remaining:      {t.get('remaining_effort_hours', '0')}h")
+        lines.append(f"  Completed:      {t.get('completed_effort_hours', '0')}h")
+        lines.append(f"  Priority:       {t.get('priority', 'N/A')}")
+        lines.append(f"  Static Cost:    \${t.get('static_cost', 0)}")
+        lines.append(f"  Resource Cost:  \${t.get('resource_cost', 0)}")
+        lines.append(f"  Total Cost:     \${t.get('total_cost', 0)}")
+        lines.append(f"  Assignments:    {t.get('assignment_count', 0)}")
+        lines.append(f"  Prerequisites:  {t.get('prerequisite_count', 0)}")
+        lines.append(f"  Dependents:     {t.get('dependent_count', 0)}")
+        lines.append(f"  Child Tasks:    {t.get('child_task_count', 0)}")
+        note = t.get("note", "")
+        if note:
+            lines.append(f"  Note:           {note}")
+        results.append("\n".join(lines))
+
+    return [types.TextContent(type="text", text="\n\n".join(results))]
+
+
+def _format_resource_detail(resources: list[dict], rname: str) -> list[types.TextContent]:
+    """Format detailed info for a specific resource."""
+    matches = [r for r in resources if rname.lower() in r.get("name", "").lower()]
+    if not matches:
+        return [types.TextContent(type="text", text=f"No resource found matching '{rname}'")]
+
+    results = []
+    for r in matches:
+        lines = [f"\U0001f464 Resource Detail: {r.get('name', '')}", "=" * 60]
+        lines.append(f"  ID:             {r['id']}")
+        lines.append(f"  Type:           {r.get('resource_type', 'N/A')}")
+        lines.append(f"  Level:          {r.get('outline_depth', 0)}")
+        lines.append(f"  Units:          {r.get('number', 1.0) * 100:.0f}%")
+        lines.append(f"  Efficiency:     {r.get('efficiency', 1.0) * 100:.0f}%")
+        lines.append(f"  Cost/Use:       \${r.get('cost_per_use', 0)}")
+        lines.append(f"  Cost/Hour:      \${r.get('cost_per_hour', 0)}/h")
+        hrs = round(r.get("total_seconds", 0) / 3600, 1)
+        lines.append(f"  Total Hours:    {hrs}h")
+        lines.append(f"  Total Uses:     {r.get('total_uses', 0)}")
+        lines.append(f"  Total Cost:     \${r.get('total_cost', 0)}")
+        email = r.get("email", "")
+        if email:
+            lines.append(f"  Email:          {email}")
+        note = r.get("note", "")
+        if note:
+            lines.append(f"  Note:           {note}")
+        results.append("\n".join(lines))
+
+    return [types.TextContent(type="text", text="\n\n".join(results))]
+
+
+def _format_violations(violations: list[dict], tasks: list[dict]) -> list[types.TextContent]:
+    """Format violation list."""
+    task_names = _task_name_map(tasks)
+    lines = [f"⚠️ Violations ({len(violations)})", "=" * 60]
+
+    if not violations:
+        lines.append("  (no violations found)")
+
+    for v in violations:
+        vtype = v.get("violation_type", "unknown")
+        desc = v.get("description", "")
+        tid = v.get("task_id", -1)
+        tname = task_names.get(tid, f"Task #{tid}") if tid != -1 else "N/A"
+        lines.append(f"  ⚠️ [{vtype}] {desc}")
+        lines.append(f"       Task: {tname}")
+
+    return [types.TextContent(type="text", text="\n".join(lines))]
+
+
+def _format_assignments(assignments: list[dict], tasks: list[dict], resources: list[dict]) -> list[types.TextContent]:
+    """Format assignment list."""
+    task_names = _task_name_map(tasks)
+    res_names = _resource_name_map(resources)
+    lines = [f"\U0001f4cb Assignments ({len(assignments)})", "=" * 60]
+
+    if not assignments:
+        lines.append("  (no assignments found in this project)")
+
+    for a in assignments:
+        tid = a.get("task_id", 0)
+        rid = a.get("resource_id", 0)
+        tname = task_names.get(tid, f"Task #{tid}")
+        rname = res_names.get(rid, f"Resource #{rid}")
+        lines.append(f"  \U0001f464 {rname:20s} → \U0001f4cb {tname}")
+
+    return [types.TextContent(type="text", text="\n".join(lines))]
+
+
+def _format_dependencies(dependencies: list[dict], tasks: list[dict]) -> list[types.TextContent]:
+    """Format dependency list."""
+    task_names = _task_name_map(tasks)
+    lines = [f"\U0001f517 Dependencies ({len(dependencies)})", "=" * 60]
+
+    if not dependencies:
+        lines.append("  (no dependencies found in this project)")
+
+    for d in dependencies:
+        tid = d.get("task_id", 0)
+        pid = d.get("prerequisite_task_id", 0)
+        tname = task_names.get(tid, f"Task #{tid}")
+        pname = task_names.get(pid, f"Task #{pid}")
+        lines.append(f"  \U0001f4cb {tname:45s} ← {pname}")
 
     return [types.TextContent(type="text", text="\n".join(lines))]
 

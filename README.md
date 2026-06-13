@@ -25,7 +25,7 @@ Ask Claude questions like:
 | 🔍 **Search** | Find tasks by keyword across the entire schedule |
 | 👤 **Resources** | List all human resources and assignments |
 | 📊 **Summary** | Phase overview, progress statistics, timeline |
-| 🔒 **Safe concurrency** | Cross-process lock prevents conflicts when multiple Claude sessions run |
+| 🔒 **Safe concurrency** | Direct AppleScript reading avoids temp-file conflicts when multiple sessions run |
 
 ## Prerequisites
 
@@ -162,7 +162,7 @@ Claude：调用 schedule_summary → 显示阶段概览和进度统计
 ## How It Works
 
 ```
-.mpp file ──→ OmniPlan (AppleScript) ──→ .oplx (XML) ──→ MCP Server ──→ Claude
+.mpp file ──→ OmniPlan (AppleScript direct read) ──→ pipe-delimited records ──→ Claude
                           ↑
 .oplx file ───────────────┴─── direct XML parsing ──────┘
 ```
@@ -171,12 +171,12 @@ Claude：调用 schedule_summary → 显示阶段概览和进度统计
 Direct XML parsing — fast, no external dependencies.
 
 ### For .mpp files
-1. MCP server opens the `.mpp` file in OmniPlan via AppleScript
-2. Exports to `.oplx` format
-3. Parses the exported XML
-4. Cleans up temporary files
+1. MCP server opens the `.mpp` file in OmniPlan via the macOS `open` command
+2. Reads all project data (tasks, resources, dates, progress) directly from OmniPlan's in-memory object model via AppleScript
+3. Parses the pipe-delimited output into structured records
+4. Closes the document
 
-> A **cross-process file lock** prevents AppleScript conflicts when multiple Claude Code sessions run simultaneously.
+> No temporary files are created — data is read directly from OmniPlan's in-memory model.
 
 ## Project Structure
 
@@ -192,8 +192,7 @@ omniplan-mcp/
 │       ├── __init__.py         # Package version
 │       ├── __main__.py         # CLI entry point
 │       ├── server.py           # MCP server (tools & handlers)
-│       ├── parser.py           # .mpp / .oplx file parsing
-│       └── lock.py             # Cross-process file lock
+│       └── parser.py           # .mpp (AppleScript) / .oplx (XML) parsing
 └── tests/
     └── test_parser.py          # Unit tests
 ```
@@ -217,18 +216,18 @@ python -m omniplan_mcp
 
 ### Publishing to PyPI
 
+Published automatically via GitHub Actions (Trusted Publisher) when a tag is pushed:
+
 ```bash
-# Install build tools
-pip install build twine
+git tag v0.1.0
+git push origin v0.1.0
+```
 
-# Build
+Manual build (for testing):
+
+```bash
+pip install build
 python -m build
-
-# Upload to TestPyPI first
-twine upload --repository testpypi dist/*
-
-# Upload to PyPI
-twine upload dist/*
 ```
 
 ## Requirements
