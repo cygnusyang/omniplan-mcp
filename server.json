@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cygnusyang/omniplan-mcp",
+  "title": "OmniPlan",
+  "description": "MCP server for reading and editing OmniPlan (.oplx) and Microsoft Project (.mpp) schedule files. Provides task tree navigation, dependency management, schedule analysis, and write operations via AppleScript bridge on macOS.",
+  "websiteUrl": "https://github.com/cygnusyang/omniplan-mcp",
+  "repository": {
+    "url": "https://github.com/cygnusyang/omniplan-mcp",
+    "source": "github"
+  },
+  "version": "0.4.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "omniplan-mcp",
+      "version": "0.4.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeHint": "uvx"
+    }
+  ]
+}

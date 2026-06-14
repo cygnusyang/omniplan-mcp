@@ -5,6 +5,8 @@
   <img src="https://img.shields.io/github/v/release/cygnusyang/omniplan-mcp" alt="Release">
 </p>
 
+<!-- mcp-name: io.github.cygnusyang/omniplan-mcp -->
+
 # OmniPlan MCP Server
 
 A [Model Context Protocol (MCP)](https://modelcontextprotocol.io) server that lets Claude read and analyze project schedule files — **OmniPlan (.oplx)** and **Microsoft Project (.mpp)** formats.
