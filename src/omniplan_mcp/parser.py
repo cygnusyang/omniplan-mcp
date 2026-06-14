@@ -330,19 +330,21 @@ def _parse_as_record(line: str) -> dict[str, Any]:
             "percent_complete": round(pct_raw * 100, 1),
             "effort_hours": _seconds_to_hours(effort_sec),
             "effort_seconds": effort_sec,
-            "outline_depth": int(parts[9]) if len(parts) > 9 and parts[9] else 0,
-            "outline_number": parts[10] if len(parts) > 10 else "",
-            "parent_id": int(parts[11]) if len(parts) > 11 and parts[11] else -1,
-            "priority": int(parts[12]) if len(parts) > 12 and parts[12] else 0,
+            "remaining_effort_hours": _seconds_to_hours(float(parts[9])) if len(parts) > 9 and parts[9] else 0,
+            "completed_effort_hours": _seconds_to_hours(float(parts[10])) if len(parts) > 10 and parts[10] else 0,
+            "outline_depth": int(parts[11]) if len(parts) > 11 and parts[11] else 0,
+            "outline_number": parts[12] if len(parts) > 12 else "",
+            "parent_id": int(parts[13]) if len(parts) > 13 and parts[13] else -1,
+            "priority": int(parts[14]) if len(parts) > 14 and parts[14] else 0,
         }
 
         # Optional extra fields from later pipe positions
-        if len(parts) > 22:
-            result["task_status"] = parts[14] if len(parts) > 14 else ""
-            result["static_cost"] = float(parts[15]) if len(parts) > 15 and parts[15] else 0
-            result["resource_cost"] = float(parts[16]) if len(parts) > 16 and parts[16] else 0
-            result["total_cost"] = float(parts[17]) if len(parts) > 17 and parts[17] else 0
-            result["note"] = parts[18] if len(parts) > 18 else ""
+        if len(parts) > 15:
+            result["task_status"] = parts[15] if len(parts) > 15 else ""
+            result["static_cost"] = float(parts[16]) if len(parts) > 16 and parts[16] else 0
+            result["resource_cost"] = float(parts[17]) if len(parts) > 17 and parts[17] else 0
+            result["total_cost"] = float(parts[18]) if len(parts) > 18 and parts[18] else 0
+            result["note"] = parts[19] if len(parts) > 19 else ""
             result["child_task_count"] = int(parts[19]) if len(parts) > 19 and parts[19] else 0
             result["assignment_count"] = int(parts[20]) if len(parts) > 20 and parts[20] else 0
             result["prerequisite_count"] = int(parts[21]) if len(parts) > 21 and parts[21] else 0
@@ -1038,18 +1040,18 @@ tell application "OmniPlan"
     repeat with t in allTasks
         if id of t = {tid} then
             set tname to name of t
-            set completed of t to 1.0
+            set completed of t to 100
             set countUpdated to countUpdated + 1
             set end of resultLines to "Updated: " & tname & " (GROUP)"
             -- Get all descendants recursively (2 levels deep)
             set children to every task of t
             repeat with child in children
-                set completed of child to 1.0
+                set completed of child to 100
                 set countUpdated to countUpdated + 1
                 set end of resultLines to "Updated: " & name of child
                 set grandchildren to every task of child
                 repeat with gc in grandchildren
-                    set completed of gc to 1.0
+                    set completed of gc to 100
                     set countUpdated to countUpdated + 1
                     set end of resultLines to "Updated: " & name of gc
                 end repeat
@@ -1067,7 +1069,7 @@ tell application "OmniPlan"
     set allTasks to every task of sce
     repeat with t in allTasks
         if id of t = {tid} then
-            set completed of t to 1.0
+            set completed of t to 100
             return "Updated: " & name of t
         end if
     end repeat
@@ -1099,17 +1101,17 @@ tell application "OmniPlan"
     set resultLines to {{}}
     repeat with t in allTasks
         if name of t = "{safe_name}" then
-            set completed of t to 1.0
+            set completed of t to 100
             set countUpdated to countUpdated + 1
             set end of resultLines to "Updated: " & name of t & " (GROUP)"
             set children to every task of t
             repeat with child in children
-                set completed of child to 1.0
+                set completed of child to 100
                 set countUpdated to countUpdated + 1
                 set end of resultLines to "Updated: " & name of child
                 set grandchildren to every task of child
                 repeat with gc in grandchildren
-                    set completed of gc to 1.0
+                    set completed of gc to 100
                     set countUpdated to countUpdated + 1
                     set end of resultLines to "Updated: " & name of gc
                 end repeat
@@ -1127,7 +1129,7 @@ tell application "OmniPlan"
     set allTasks to every task of sce
     repeat with t in allTasks
         if name of t = "{safe_name}" then
-            set completed of t to 1.0
+            set completed of t to 100
             return "Updated: " & name of t
         end if
     end repeat
@@ -1353,6 +1355,83 @@ tell application "OmniPlan"
     return "Parent task {pid} not found"
 end tell'''
     return _run_as(script)
+
+
+def set_task_estimate(filepath: str, task_id: str, min_seconds: int, max_seconds: int) -> str:
+    """Set a task's min-estimate and max-estimate (uncertainty range).
+
+    Modifies the .oplx file on disk directly (AppleScript doesn't expose
+    these properties). The file must be saved in OmniPlan first.
+
+    Args:
+        filepath: Absolute path to the .oplx file.
+        task_id: XML task ID (e.g. "t258").
+        min_seconds: Minimum estimate in working seconds.
+        max_seconds: Maximum estimate in working seconds.
+
+    Returns:
+        Confirmation message.
+    """
+    tid = task_id.lstrip("t")
+
+    with zipfile.ZipFile(filepath, 'r') as z:
+        names = z.namelist()
+        if "Actual.xml" not in names:
+            raise RuntimeError("Actual.xml not found in .oplx file")
+        content = z.read("Actual.xml").decode("utf-8")
+
+    root = ET.fromstring(content)
+
+    # Find the task
+    task_el = root.find(f".//{{http://www.omnigroup.com/namespace/OmniPlan/v2}}task[@id='t{tid}']")
+    if task_el is None:
+        task_el = root.find(f".//{{http://www.omnigroup.com/namespace/OmniPlan/v2}}task[@id='{task_id}']")
+    if task_el is None:
+        raise RuntimeError(f"Task {task_id} not found in .oplx file")
+
+    name_el = task_el.find(f"{{http://www.omnigroup.com/namespace/OmniPlan/v2}}title")
+    task_name = name_el.text if name_el is not None else task_id
+
+    NS = "http://www.omnigroup.com/namespace/OmniPlan/v2"
+
+    # Remove existing min-estimate / max-estimate
+    for child in list(task_el):
+        local = child.tag.split("}")[1] if "}" in child.tag else child.tag
+        if local in ("min-estimate", "max-estimate"):
+            task_el.remove(child)
+
+    # Add new elements in correct position (after effort)
+    effort_el = task_el.find(f"{{{NS}}}effort")
+    insert_after = effort_el if effort_el is not None else None
+
+    min_el = ET.SubElement(task_el, f"{{{NS}}}min-estimate")
+    min_el.text = str(min_seconds)
+
+    max_el = ET.SubElement(task_el, f"{{{NS}}}max-estimate")
+    max_el.text = str(max_seconds)
+
+    # Re-serialize
+    xml_bytes = ET.tostring(root, encoding="unicode", xml_declaration=True).encode("utf-8")
+
+    # Write back to ZIP
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(suffix=".oplx", delete=False)
+    try:
+        with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as zout:
+            with zipfile.ZipFile(filepath, 'r') as zin:
+                for item in zin.infolist():
+                    if item.filename == "Actual.xml":
+                        zout.writestr(item, xml_bytes)
+                    else:
+                        zout.writestr(item, zin.read(item.filename))
+        os.replace(tmp.name, filepath)
+    except:
+        os.unlink(tmp.name)
+        raise
+
+    min_days = round(min_seconds / 28800, 1)
+    max_days = round(max_seconds / 28800, 1)
+    return f"Set {task_name} estimate range: min={min_days}d, max={max_days}d"
 
 
 def save_document() -> str:

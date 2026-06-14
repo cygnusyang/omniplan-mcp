@@ -493,6 +493,37 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="set_task_estimate",
+            description=(
+                "Set a task's uncertainty range (min-estimate / max-estimate) "
+                "for Monte Carlo simulation. Modifies the .oplx file on disk. "
+                "1 working day = 28800 seconds. "
+                "Example: 90% = effort * 0.9, 110% = effort * 1.1."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Absolute path to the .oplx file",
+                    },
+                    "task_id": {
+                        "type": "string",
+                        "description": "XML task ID (e.g. t258, or numeric 258)",
+                    },
+                    "min_seconds": {
+                        "type": "integer",
+                        "description": "Minimum estimate in working seconds",
+                    },
+                    "max_seconds": {
+                        "type": "integer",
+                        "description": "Maximum estimate in working seconds",
+                    },
+                },
+                "required": ["filepath", "task_id", "min_seconds", "max_seconds"],
+            },
+        ),
+        types.Tool(
             name="lookup_task",
             description=(
                 "Search for a task by name and return its ID, type, and other details. "
@@ -556,7 +587,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             )
         ]
 
-    # Tools that don't need file parsing
+    # Tools that don't need file parsing (AppleScript-based operations on open document)
     if name == "evaluate_omniplan_script":
         script = arguments.get("script", "")
         return _format_evaluate_script(script)
@@ -568,52 +599,8 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
     elif name == "get_schedule_settings":
         return _format_schedule_settings()
 
-    # Tools that require file parsing
-    filepath = arguments.get("filepath", "")
-
-    if not os.path.exists(filepath):
-        return [
-            types.TextContent(type="text", text=f"File not found: {filepath}")
-        ]
-
-    try:
-        projects, resources, tasks, violations, assignments, dependencies = parse_file(filepath)
-    except Exception as e:
-        return [
-            types.TextContent(
-                type="text",
-                text=f"Error parsing file: {type(e).__name__}: {e}",
-            )
-        ]
-
-    if name == "read_schedule":
-        fmt = arguments.get("format", "tree")
-        return _format_read_schedule(projects, tasks, fmt)
-    elif name == "list_milestones":
-        return _format_milestones(tasks)
-    elif name == "list_resources":
-        detail = arguments.get("detail", "simple")
-        return _format_resources(resources, detail)
-    elif name == "search_tasks":
-        keyword = arguments.get("keyword", "")
-        return _format_search(tasks, keyword)
-    elif name == "schedule_summary":
-        return _format_summary(projects, resources, tasks, violations)
-    elif name == "get_task_detail":
-        task_id = arguments.get("task_id")
-        task_name = arguments.get("task_name", "")
-        return _format_task_detail(tasks, task_id, task_name)
-    elif name == "get_resource_detail":
-        rname = arguments.get("resource_name", "")
-        return _format_resource_detail(resources, rname)
-    elif name == "list_violations":
-        return _format_violations(violations, tasks)
-    elif name == "list_assignments":
-        return _format_assignments(assignments, tasks, resources)
-    elif name == "list_dependencies":
-        return _format_dependencies(dependencies, tasks)
-    # ── Write Operation Handlers ────────────────────────────────────────
-    elif name == "lookup_task":
+    # Write operations that work on the open document (no filepath needed)
+    if name == "lookup_task":
         search_name = arguments.get("search_name", "")
         result = lookup_task(search_name)
         return [types.TextContent(type="text", text=result)]
@@ -664,6 +651,51 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
     elif name == "save_document":
         result = save_document()
         return [types.TextContent(type="text", text=result)]
+
+    # Tools that require file parsing (read-only, need a file on disk)
+    filepath = arguments.get("filepath", "")
+
+    if not os.path.exists(filepath):
+        return [
+            types.TextContent(type="text", text=f"File not found: {filepath}")
+        ]
+
+    try:
+        projects, resources, tasks, violations, assignments, dependencies = parse_file(filepath)
+    except Exception as e:
+        return [
+            types.TextContent(
+                type="text",
+                text=f"Error parsing file: {type(e).__name__}: {e}",
+            )
+        ]
+
+    if name == "read_schedule":
+        fmt = arguments.get("format", "tree")
+        return _format_read_schedule(projects, tasks, fmt)
+    elif name == "list_milestones":
+        return _format_milestones(tasks)
+    elif name == "list_resources":
+        detail = arguments.get("detail", "simple")
+        return _format_resources(resources, detail)
+    elif name == "search_tasks":
+        keyword = arguments.get("keyword", "")
+        return _format_search(tasks, keyword)
+    elif name == "schedule_summary":
+        return _format_summary(projects, resources, tasks, violations)
+    elif name == "get_task_detail":
+        task_id = arguments.get("task_id")
+        task_name = arguments.get("task_name", "")
+        return _format_task_detail(tasks, task_id, task_name)
+    elif name == "get_resource_detail":
+        rname = arguments.get("resource_name", "")
+        return _format_resource_detail(resources, rname)
+    elif name == "list_violations":
+        return _format_violations(violations, tasks)
+    elif name == "list_assignments":
+        return _format_assignments(assignments, tasks, resources)
+    elif name == "list_dependencies":
+        return _format_dependencies(dependencies, tasks)
     else:
         return [types.TextContent(type="text", text=f"Unknown tool: {name}")]
 
