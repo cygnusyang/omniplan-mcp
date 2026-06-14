@@ -24,17 +24,24 @@ from .parser import (
     delete_task,
     evaluate_javascript,
     export_schedule,
+    find_orphan_tasks,
     get_resources_staff,
     lookup_task,
+    move_task,
     parse_file,
     read_schedule_settings,
     remove_dependency,
     rename_task,
+    reorder_task,
+    repair_orphan_tasks,
     save_document,
     set_task_completed,
     set_task_completed_by_name,
+    set_task_constraint_date,
     set_task_duration,
     set_task_estimate,
+    set_task_progress,
+    set_task_type,
 )
 
 server = Server("omniplan-mcp")
@@ -97,7 +104,7 @@ def _status_icon(status: str) -> str:
 
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
-    return [
+    tools = [
         types.Tool(
             name="read_schedule",
             description=(
@@ -355,6 +362,29 @@ async def handle_list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="set_task_progress",
+            description=(
+                "Set a task's completion percentage from 0 to 100. "
+                "Requires an open OmniPlan document."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric like 258, or XML like t258)",
+                    },
+                    "percent_complete": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100,
+                        "description": "Completion percentage from 0 to 100",
+                    },
+                },
+                "required": ["task_id", "percent_complete"],
+            },
+        ),
+        types.Tool(
             name="add_dependency",
             description=(
                 "Add a finish-to-start dependency: dependent_task ← prerequisite_task. "
@@ -463,13 +493,21 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="add_task",
-            description="Add a new task under a parent group.",
+            description=(
+                "Add a new task under a parent group. "
+                "Pass parent_task_id='-1' (or '0'/'root') to add a top-level "
+                "phase directly under the project root (sibling of "
+                "Charter-CD/EVT/etc.)."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "parent_task_id": {
                         "type": "string",
-                        "description": "Parent group task ID (AppleScript numeric)",
+                        "description": (
+                            "Parent group task ID (AppleScript numeric). "
+                            "Use '-1', '0', or 'root' for top-level phase."
+                        ),
                     },
                     "task_name": {
                         "type": "string",
@@ -482,6 +520,52 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                 },
                 "required": ["parent_task_id", "task_name"],
+            },
+        ),
+        types.Tool(
+            name="find_orphan_tasks",
+            description=(
+                "Find tasks that exist in the .oplx XML but are not "
+                "referenced as a child of any other task. Such tasks are "
+                "invisible in OmniPlan and may be silently dropped on the "
+                "next save. Returns a list of {id, name} dicts."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Absolute path to the .oplx file",
+                    },
+                },
+                "required": ["filepath"],
+            },
+        ),
+        types.Tool(
+            name="repair_orphan_tasks",
+            description=(
+                "Find orphan tasks and attach them to a parent so they "
+                "become visible in OmniPlan. Default attaches to the "
+                "synthetic root (t-1) as top-level phases. The document "
+                "must be closed in OmniPlan before calling this."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "filepath": {
+                        "type": "string",
+                        "description": "Absolute path to the .oplx file",
+                    },
+                    "attach_to": {
+                        "type": "string",
+                        "description": (
+                            "Task ID to attach orphans to. Default 't-1' "
+                            "(makes them top-level phases)."
+                        ),
+                        "default": "t-1",
+                    },
+                },
+                "required": ["filepath"],
             },
         ),
         types.Tool(
@@ -571,7 +655,151 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["filepath"],
             },
         ),
+        types.Tool(
+            name="move_task",
+            description=(
+                "Move a task under a new parent group. "
+                "The task will become a child of the target group."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric, e.g. 269)",
+                    },
+                    "target_parent_id": {
+                        "type": "string",
+                        "description": "Target parent group ID (AppleScript numeric, e.g. 291)",
+                    },
+                },
+                "required": ["task_id", "target_parent_id"],
+            },
+        ),
+        types.Tool(
+            name="set_task_constraint_date",
+            description=(
+                "Set a task's starting constraint date (earliest start date). "
+                "Use this to lock a task to start on a specific date."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric, e.g. 249)",
+                    },
+                    "date_string": {
+                        "type": "string",
+                        "description": "Date string, e.g. '2026年6月15日'",
+                    },
+                },
+                "required": ["task_id", "date_string"],
+            },
+        ),
+        types.Tool(
+            name="clear_task_constraint_date",
+            description=(
+                "Remove a task's starting constraint date, "
+                "allowing it to be scheduled automatically again."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric, e.g. 249)",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        ),
+        types.Tool(
+            name="set_task_type",
+            description=(
+                "Change a task's type. Use 'group' to make it a parent container "
+                "that can hold subtasks, 'milestone' for milestones, "
+                "'standard' for regular tasks."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric)",
+                    },
+                    "task_type": {
+                        "type": "string",
+                        "enum": ["standard", "group", "milestone"],
+                        "description": "New task type",
+                    },
+                },
+                "required": ["task_id", "task_type"],
+            },
+        ),
+        types.Tool(
+            name="reorder_task",
+            description=(
+                "Move a task before another task in the same parent group "
+                "to change the ordering. The task will be placed immediately "
+                "before the reference task."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric) of the task to move",
+                    },
+                    "before_task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric) of the reference task to place before",
+                    },
+                },
+                "required": ["task_id", "before_task_id"],
+            },
+        ),
     ]
+
+    document_tools = {
+        "lookup_task",
+        "get_schedule_settings",
+        "set_task_completed",
+        "set_task_completed_by_name",
+        "set_task_progress",
+        "add_dependency",
+        "remove_dependency",
+        "set_task_duration",
+        "clear_constraint_date",
+        "rename_task",
+        "delete_task",
+        "add_task",
+        "save_document",
+        "move_task",
+        "set_task_constraint_date",
+        "clear_task_constraint_date",
+        "set_task_type",
+        "reorder_task",
+    }
+    for tool in tools:
+        if tool.name not in document_tools:
+            continue
+        properties = tool.inputSchema.setdefault("properties", {})
+        properties["filepath"] = {
+            "type": "string",
+            "description": (
+                "Absolute path of the open OmniPlan document to modify. "
+                "Required when multiple documents are open unless document_id is provided."
+            ),
+        }
+        properties["document_id"] = {
+            "type": "string",
+            "description": (
+                "OmniPlan document ID to modify. "
+                "Use instead of filepath when selecting an open document by ID."
+            ),
+        }
+    return tools
 
 
 # ── Tool Handlers ─────────────────────────────────────────────────────────
@@ -598,59 +826,151 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         output_path = arguments.get("output_path")
         return _format_export(filepath, fmt, output_path)
     elif name == "get_schedule_settings":
-        return _format_schedule_settings()
+        return _format_schedule_settings(
+            arguments.get("filepath"),
+            arguments.get("document_id"),
+        )
 
     # Write operations that work on the open document (no filepath needed)
+    filepath = arguments.get("filepath")
+    document_id = arguments.get("document_id")
+    if filepath and document_id:
+        return [
+            types.TextContent(
+                type="text",
+                text="Error: specify either filepath or document_id, not both",
+            )
+        ]
     if name == "lookup_task":
         search_name = arguments.get("search_name", "")
-        result = lookup_task(search_name)
+        result = lookup_task(search_name, filepath, document_id)
         return [types.TextContent(type="text", text=result)]
     elif name == "set_task_completed":
         task_id = arguments.get("task_id", "")
         include_subtree = arguments.get("include_subtree", True)
-        result = set_task_completed(task_id, include_subtree)
+        result = set_task_completed(task_id, include_subtree, filepath, document_id)
         return [types.TextContent(type="text", text=result)]
     elif name == "set_task_completed_by_name":
         task_name = arguments.get("task_name", "")
         include_subtree = arguments.get("include_subtree", True)
-        result = set_task_completed_by_name(task_name, include_subtree)
+        result = set_task_completed_by_name(
+            task_name,
+            include_subtree,
+            filepath,
+            document_id,
+        )
+        return [types.TextContent(type="text", text=result)]
+    elif name == "set_task_progress":
+        task_id = arguments.get("task_id", "")
+        percent_complete = arguments.get("percent_complete")
+        try:
+            result = set_task_progress(
+                task_id,
+                percent_complete,
+                filepath,
+                document_id,
+            )
+        except ValueError as e:
+            result = f"Error: {e}"
         return [types.TextContent(type="text", text=result)]
     elif name == "add_dependency":
         dep = arguments.get("dependent_task_id", "")
         pre = arguments.get("prerequisite_task_id", "")
-        result = add_dependency(dep, pre)
+        result = add_dependency(dep, pre, filepath, document_id)
         return [types.TextContent(type="text", text=result)]
     elif name == "remove_dependency":
         dep = arguments.get("dependent_task_id", "")
         pre = arguments.get("prerequisite_task_id", "")
-        result = remove_dependency(dep, pre)
+        result = remove_dependency(dep, pre, filepath, document_id)
         return [types.TextContent(type="text", text=result)]
     elif name == "set_task_duration":
         task_id = arguments.get("task_id", "")
         duration_seconds = arguments.get("duration_seconds", 0)
-        result = set_task_duration(task_id, duration_seconds)
+        result = set_task_duration(
+            task_id,
+            duration_seconds,
+            filepath,
+            document_id,
+        )
         return [types.TextContent(type="text", text=result)]
     elif name == "clear_constraint_date":
         task_id = arguments.get("task_id", "")
-        result = clear_constraint_date(task_id)
+        result = clear_constraint_date(task_id, filepath, document_id)
         return [types.TextContent(type="text", text=result)]
     elif name == "rename_task":
         task_id = arguments.get("task_id", "")
         new_name = arguments.get("new_name", "")
-        result = rename_task(task_id, new_name)
+        result = rename_task(task_id, new_name, filepath, document_id)
         return [types.TextContent(type="text", text=result)]
     elif name == "delete_task":
         task_id = arguments.get("task_id", "")
-        result = delete_task(task_id)
+        result = delete_task(task_id, filepath, document_id)
         return [types.TextContent(type="text", text=result)]
     elif name == "add_task":
         parent_id = arguments.get("parent_task_id", "")
         task_name = arguments.get("task_name", "")
         duration_seconds = arguments.get("duration_seconds", 28800)
-        result = add_task(parent_id, task_name, duration_seconds)
+        result = add_task(
+            parent_id,
+            task_name,
+            duration_seconds,
+            filepath,
+            document_id,
+        )
+        return [types.TextContent(type="text", text=result)]
+    elif name == "find_orphan_tasks":
+        fpath = arguments.get("filepath", "")
+        orphans = find_orphan_tasks(fpath)
+        if not orphans:
+            return [types.TextContent(type="text", text="No orphans found")]
+        lines = [f"{o['id']}: {o['name']}" for o in orphans]
+        return [types.TextContent(type="text", text="\n".join(lines))]
+    elif name == "repair_orphan_tasks":
+        fpath = arguments.get("filepath", "")
+        attach_to = arguments.get("attach_to", "t-1")
+        result = repair_orphan_tasks(fpath, attach_to)
         return [types.TextContent(type="text", text=result)]
     elif name == "save_document":
-        result = save_document()
+        result = save_document(filepath, document_id)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "move_task":
+        task_id = arguments.get("task_id", "")
+        target_parent_id = arguments.get("target_parent_id", "")
+        result = move_task(
+            task_id,
+            target_parent_id,
+            filepath,
+            document_id,
+        )
+        return [types.TextContent(type="text", text=result)]
+    elif name == "set_task_constraint_date":
+        task_id = arguments.get("task_id", "")
+        date_string = arguments.get("date_string", "")
+        result = set_task_constraint_date(
+            task_id,
+            date_string,
+            filepath,
+            document_id,
+        )
+        return [types.TextContent(type="text", text=result)]
+    elif name == "clear_task_constraint_date":
+        task_id = arguments.get("task_id", "")
+        result = clear_constraint_date(task_id, filepath, document_id)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "set_task_type":
+        task_id = arguments.get("task_id", "")
+        task_type = arguments.get("task_type", "")
+        result = set_task_type(task_id, task_type, filepath, document_id)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "reorder_task":
+        task_id = arguments.get("task_id", "")
+        before_task_id = arguments.get("before_task_id", "")
+        result = reorder_task(
+            task_id,
+            before_task_id,
+            filepath,
+            document_id,
+        )
         return [types.TextContent(type="text", text=result)]
     elif name == "set_task_estimate":
         filepath = arguments.get("filepath", "")
@@ -748,10 +1068,13 @@ def _format_export(filepath: str, fmt: str, output_path: str | None) -> list[typ
         return [types.TextContent(type="text", text=f"Export error: {e}")]
 
 
-def _format_schedule_settings() -> list[types.TextContent]:
+def _format_schedule_settings(
+    filepath: str | None = None,
+    document_id: str | None = None,
+) -> list[types.TextContent]:
     """Read and format schedule/work-time settings."""
     try:
-        settings = read_schedule_settings()
+        settings = read_schedule_settings(filepath, document_id)
     except RuntimeError as e:
         return [types.TextContent(type="text", text=f"Error: {e}")]
 

@@ -169,14 +169,20 @@ Claude：调用 schedule_summary → 显示阶段概览和进度统计
 | `lookup_task` | Find task by name, get its numeric ID | `search_name` |
 | `set_task_completed` | Set task to 100% complete | `task_id`, `include_subtree` |
 | `set_task_completed_by_name` | Set task to 100% complete by name | `task_name`, `include_subtree` |
+| `set_task_progress` | Set task completion to any percentage from 0 to 100 | `task_id`, `percent_complete` |
 | `add_dependency` | Add finish-to-start dependency | `dependent_task_id`, `prerequisite_task_id` |
 | `remove_dependency` | Remove a dependency | `dependent_task_id`, `prerequisite_task_id` |
 | `set_task_duration` | Change task duration | `task_id`, `duration_seconds` |
+| `set_task_estimate` | Set min/max estimate directly in a closed `.oplx` file | `filepath`, `task_id`, `min_seconds`, `max_seconds` |
 | `clear_constraint_date` | Remove locked start date | `task_id` |
 | `rename_task` | Rename a task | `task_id`, `new_name` |
 | `delete_task` | Delete a task and its children | `task_id` |
 | `add_task` | Add a new task under a parent | `parent_task_id`, `task_name`, `duration_seconds` (optional) |
-| `save_document` | Save the OmniPlan document | (none) |
+| `save_document` | Save the selected OmniPlan document | `filepath` or `document_id` when multiple documents are open |
+
+AppleScript-backed tools accept optional `filepath` or `document_id` selectors.
+When multiple OmniPlan documents are open, one selector is required; otherwise
+the operation is rejected instead of defaulting to an arbitrary document.
 
 ### New in v0.4.0
 
