@@ -34,6 +34,7 @@ from .parser import (
     set_task_completed,
     set_task_completed_by_name,
     set_task_duration,
+    set_task_estimate,
 )
 
 server = Server("omniplan-mcp")
@@ -650,6 +651,13 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         return [types.TextContent(type="text", text=result)]
     elif name == "save_document":
         result = save_document()
+        return [types.TextContent(type="text", text=result)]
+    elif name == "set_task_estimate":
+        filepath = arguments.get("filepath", "")
+        task_id = arguments.get("task_id", "")
+        min_seconds = arguments.get("min_seconds", 0)
+        max_seconds = arguments.get("max_seconds", 0)
+        result = set_task_estimate(filepath, task_id, min_seconds, max_seconds)
         return [types.TextContent(type="text", text=result)]
 
     # Tools that require file parsing (read-only, need a file on disk)
