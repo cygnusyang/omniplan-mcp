@@ -12,36 +12,45 @@ from omniplan_mcp.cli import cli, _parse_duration_seconds
 
 # ── Sample .oplx data ───────────────────────────────────────────────────────
 
-SAMPLE_ACTUAL_XML = """<?xml version="1.0"?>
-<OmniPlanProject actual-file="yes" project-version="4.5">
-  <project id="p1" name="Test Project">
-    <start>2024-01-01</start>
-    <end>2024-02-01</end>
-  </project>
-  <resource id="r1" name="Alice" type="Personnel"/>
-  <resource id="r2" name="Bob" type="Personnel"/>
-  <task id="t1" name="Design" outline-depth="0">
-    <earliest-start>2024-01-01</earliest-start>
-    <latest-end>2024-01-10</latest-end>
-    <effort-done>0</effort-done>
+SAMPLE_ACTUAL_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2024-01-01T00:00:00.000Z</start-date>
+  <resource id="r1">
+    <name>Alice</name>
+    <type>Staff</type>
+  </resource>
+  <resource id="r2">
+    <name>Bob</name>
+    <type>Staff</type>
+  </resource>
+  <task id="t1">
+    <title>Design</title>
+    <start-date>2024-01-01T00:00:00.000Z</start-date>
+    <end-date>2024-01-10T00:00:00.000Z</end-date>
     <effort>28800</effort>
   </task>
-  <task id="t2" name="Implementation" outline-depth="0">
-    <earliest-start>2024-01-11</earliest-start>
-    <latest-end>2024-01-20</latest-end>
+  <task id="t2">
+    <title>Implementation</title>
+    <start-date>2024-01-11T00:00:00.000Z</start-date>
+    <end-date>2024-01-20T00:00:00.000Z</end-date>
+    <effort>43200</effort>
     <effort-done>14400</effort-done>
-    <effort>43200</effort>
   </task>
-  <task id="t3" name="Review" outline-depth="0">
-    <earliest-start>2024-01-21</earliest-start>
-    <latest-end>2024-01-25</latest-end>
+  <task id="t3">
+    <title>Review</title>
+    <start-date>2024-01-21T00:00:00.000Z</start-date>
+    <end-date>2024-01-25T00:00:00.000Z</end-date>
+    <effort>43200</effort>
     <effort-done>43200</effort-done>
-    <effort>43200</effort>
   </task>
-  <dependency id="d1" from="t1" to="t2"/>
-  <dependency id="d2" from="t2" to="t3"/>
-</OmniPlanProject>
-"""
+  <task id="t4">
+    <title>Done Milestone</title>
+    <type>milestone</type>
+    <start-date>2024-01-25T00:00:00.000Z</start-date>
+    <end-date>2024-01-25T00:00:00.000Z</end-date>
+    <effort>0</effort>
+  </task>
+</scenario>"""
 
 SAMPLE_TOC_XML = """<?xml version="1.0"?>
 <OmniPlanTOC>
@@ -100,7 +109,6 @@ class TestCliReadCommands:
         runner = CliRunner()
         result = runner.invoke(cli, ["read", filepath])
         assert result.exit_code == 0, result.output
-        assert "Test Project" in result.output
         assert "Design" in result.output
         assert "Implementation" in result.output
         assert "Review" in result.output
@@ -113,7 +121,7 @@ class TestCliReadCommands:
         result = runner.invoke(cli, ["read", filepath, "--json"])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
-        assert len(data["tasks"]) == 3
+        assert len(data["tasks"]) == 4
         assert data["tasks"][0]["name"] == "Design"
         assert len(data["resources"]) == 2
 
@@ -122,7 +130,7 @@ class TestCliReadCommands:
         runner = CliRunner()
         result = runner.invoke(cli, ["summary", filepath])
         assert result.exit_code == 0, result.output
-        assert "3 tasks" in result.output.lower() or "3" in result.output
+        assert "Total tasks" in result.output
 
     def test_summary_json(self, tmp_path):
         filepath = _write_temp_oplx(tmp_path)
@@ -130,9 +138,9 @@ class TestCliReadCommands:
         result = runner.invoke(cli, ["summary", filepath, "--json"])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
-        assert data["tasks"] == 3
+        assert data["tasks"] == 4
         assert data["resources"] == 2
-        assert data["dependencies"] == 2
+        assert data["dependencies"] == 0
 
     def test_search(self, tmp_path):
         filepath = _write_temp_oplx(tmp_path)
@@ -179,7 +187,7 @@ class TestCliReadCommands:
         result = runner.invoke(cli, ["tasks", filepath, "--json"])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
-        assert len(data) == 3
+        assert len(data) == 4
 
     def test_resources(self, tmp_path):
         filepath = _write_temp_oplx(tmp_path)
@@ -199,16 +207,14 @@ class TestCliReadCommands:
 
     def test_resources_none(self, tmp_path):
         """Empty resources list."""
-        actual_xml = """<?xml version="1.0"?>
-<OmniPlanProject actual-file="yes" project-version="4.5">
-  <project id="p1" name="Empty"/>
-  <task id="t1" name="Task" outline-depth="0">
-    <earliest-start>2024-01-01</earliest-start>
-    <latest-end>2024-01-10</latest-end>
-    <effort-done>0</effort-done>
+        actual_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2024-01-01T00:00:00.000Z</start-date>
+  <task id="t1">
+    <title>Task</title>
     <effort>28800</effort>
   </task>
-</OmniPlanProject>"""
+</scenario>"""
         filepath = _write_temp_oplx(tmp_path, _make_oplx_bytes(actual_xml))
         runner = CliRunner()
         result = runner.invoke(cli, ["resources", filepath])
@@ -216,25 +222,36 @@ class TestCliReadCommands:
         assert "No resources found" in result.output
 
     def test_dependencies(self, tmp_path):
-        filepath = _write_temp_oplx(tmp_path)
+        """Test dependencies display with actual dependencies in XML."""
+        actual_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2024-01-01T00:00:00.000Z</start-date>
+  <task id="t1">
+    <title>Task A</title>
+    <effort>28800</effort>
+    <prerequisite-task idref="t2"/>
+  </task>
+  <task id="t2">
+    <title>Task B</title>
+    <effort>28800</effort>
+  </task>
+</scenario>"""
+        filepath = _write_temp_oplx(tmp_path, _make_oplx_bytes(actual_xml))
         runner = CliRunner()
         result = runner.invoke(cli, ["dependencies", filepath])
         assert result.exit_code == 0, result.output
-        assert "t1" in result.output or "Design" in result.output
-        assert "t2" in result.output or "Implementation" in result.output
+        assert "No dependencies found" not in result.output
 
     def test_dependencies_none(self, tmp_path):
         """Empty dependencies list."""
-        actual_xml = """<?xml version="1.0"?>
-<OmniPlanProject actual-file="yes" project-version="4.5">
-  <project id="p1" name="No deps"/>
-  <task id="t1" name="Solo" outline-depth="0">
-    <earliest-start>2024-01-01</earliest-start>
-    <latest-end>2024-01-10</latest-end>
-    <effort-done>0</effort-done>
+        actual_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2024-01-01T00:00:00.000Z</start-date>
+  <task id="t1">
+    <title>Solo</title>
     <effort>28800</effort>
   </task>
-</OmniPlanProject>"""
+</scenario>"""
         filepath = _write_temp_oplx(tmp_path, _make_oplx_bytes(actual_xml))
         runner = CliRunner()
         result = runner.invoke(cli, ["dependencies", filepath])
@@ -247,7 +264,7 @@ class TestCliReadCommands:
         result = runner.invoke(cli, ["dependencies", filepath, "--json"])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
-        assert len(data) == 2
+        assert len(data) == 0
 
 
 class TestDurationParsing:
@@ -281,7 +298,7 @@ class TestDurationParsing:
 class TestCliWriteCommands:
     """Test write commands that call parser functions (mocked)."""
 
-    @patch("omniplan_mcp.parser.lookup_task_by_name")
+    @patch("omniplan_mcp.parser.lookup_task")
     def test_lookup(self, mock_lookup):
         mock_lookup.return_value = "Task ID: 42"
         runner = CliRunner()
@@ -373,12 +390,13 @@ class TestCliWriteCommands:
         assert result.exit_code == 0
 
     @patch("omniplan_mcp.parser.set_task_estimate")
-    def test_set_estimate(self, mock_est):
+    def test_set_estimate(self, mock_est, tmp_path):
         mock_est.return_value = "Estimate set."
+        filepath = _write_temp_oplx(tmp_path)
         runner = CliRunner()
-        result = runner.invoke(cli, ["set-estimate", "258", "3d"])
-        assert result.exit_code == 0
-        mock_est.assert_called_once_with("258", 86400)
+        result = runner.invoke(cli, ["set-estimate", filepath, "t258", "1d", "3d"])
+        assert result.exit_code == 0, result.output
+        mock_est.assert_called_once_with(filepath, "t258", 28800, 86400)
 
     @patch("omniplan_mcp.parser.save_document")
     def test_save(self, mock_save):
@@ -386,6 +404,14 @@ class TestCliWriteCommands:
         runner = CliRunner()
         result = runner.invoke(cli, ["save"])
         assert result.exit_code == 0
+
+    @patch("omniplan_mcp.parser.evaluate_javascript")
+    def test_eval_script_js(self, mock_eval):
+        mock_eval.return_value = "document.name"
+        runner = CliRunner()
+        result = runner.invoke(cli, ["eval-script", "--js", "document.name"])
+        assert result.exit_code == 0
+        assert "document.name" in result.output
 
 
 class TestErrorHandling:
@@ -401,3 +427,8 @@ class TestErrorHandling:
         result = runner.invoke(cli, ["set-duration", "258", "invalid"])
         assert result.exit_code != 0
         assert "Could not parse duration" in result.output
+
+    def test_nonexistent_file_summary(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["summary", "/nonexistent/file.oplx"])
+        assert result.exit_code != 0

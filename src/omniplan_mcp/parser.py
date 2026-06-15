@@ -2004,6 +2004,31 @@ def set_task_estimate(filepath: str, task_id: str, min_seconds: int, max_seconds
     return f"Set {task_name} estimate range: min={min_days}d, max={max_days}d"
 
 
+def add_resource(
+    name: str,
+    filepath: str | None = None,
+    document_id: str | None = None,
+) -> str:
+    """Add a new resource to the active OmniPlan document.
+
+    Args:
+        name: Name of the new resource.
+
+    Returns:
+        Confirmation message.
+    """
+    safe_name = _escape_applescript_string(name)
+    prelude = _document_prelude(filepath, document_id)
+    script = f'''
+tell application "OmniPlan"
+{prelude}
+    set sce to frontEditingScenario of project of doc
+    make new resource at end of resources of sce with properties {{name:"{safe_name}"}}
+    return "Added resource: {safe_name}"
+end tell'''
+    return _run_as(script)
+
+
 def save_document(
     filepath: str | None = None,
     document_id: str | None = None,
