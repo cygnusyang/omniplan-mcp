@@ -330,7 +330,7 @@ def resources(filepath: str, as_json: bool) -> None:
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def dependencies(filepath: str, as_json: bool) -> None:
     """List all task dependencies."""
-    _, _, _, _, _, deps = parse_file(filepath)
+    _, _, tasks, _, _, deps = parse_file(filepath)
 
     if as_json:
         _echo_json(deps)
@@ -340,11 +340,18 @@ def dependencies(filepath: str, as_json: bool) -> None:
         click.echo("No dependencies found.")
         return
 
+    # Build task name lookup
+    task_names = {t["id"]: t.get("name", f"Task #{t['id']}") for t in tasks}
+
     click.echo(f"\n{'='*60}")
     click.echo(f"🔗  Dependencies ({len(deps)})")
     click.echo(f"{'='*60}")
     for dep in deps:
-        click.echo(f"  {dep.get('from_task', '?')}  →  {dep.get('to_task', '?')}")
+        tid = dep.get("task_id", 0)
+        pid = dep.get("prerequisite_task_id", 0)
+        tname = task_names.get(tid, f"Task #{tid}")
+        pname = task_names.get(pid, f"Task #{pid}")
+        click.echo(f"  {tname:45s} ← {pname}")
 
 
 # ── lookup (needs open OmniPlan) ────────────────────────────────────────────
