@@ -488,3 +488,86 @@ def test_parse_oplx_resolves_historical_dependency_ids():
         }]
     finally:
         os.unlink(tmp.name)
+
+
+def test_xml_parsing_extracts_notes():
+    """Test that .oplx XML parsing extracts <note> from tasks and resources."""
+    from omniplan_mcp.parser import parse_file
+    import tempfile, zipfile
+
+    xml = '''<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2026-01-01T00:00:00.000Z</start-date>
+  <resource id="r1">
+    <name>Alice</name>
+    <type>Staff</type>
+    <note>Resource note text</note>
+  </resource>
+  <task id="t1">
+    <title>Task with note</title>
+    <effort>28800</effort>
+    <note>Task note content</note>
+  </task>
+  <task id="t2">
+    <title>Task without note</title>
+    <effort>28800</effort>
+  </task>
+</scenario>'''
+    tmp = tempfile.NamedTemporaryFile(suffix=".oplx", delete=False)
+    with zipfile.ZipFile(tmp, "w") as z:
+        z.writestr("Actual.xml", xml)
+    try:
+        _, resources, tasks, _, _, _ = parse_file(tmp.name)
+        assert resources[0]["note"] == "Resource note text"
+        task_map = {t["id"]: t for t in tasks}
+        assert task_map["t1"]["note"] == "Task note content"
+        assert task_map["t2"]["note"] == ""
+    finally:
+        os.unlink(tmp.name)
+
+
+def test_set_task_note_script(monkeypatch):
+    """Verify set_task_note generates correct AppleScript."""
+    from omniplan_mcp import parser
+
+    captured = {}
+
+    def fake_run(script):
+        captured["script"] = script
+        return "ok"
+
+    monkeypatch.setattr(parser, "_run_as", fake_run)
+    assert parser.set_task_note("258", "Hello note") == "ok"
+    assert 'if id of t = 258' in captured["script"]
+    assert 'set note of t to "Hello note"' in captured["script"]
+
+
+def test_set_resource_note_script(monkeypatch):
+    """Verify set_resource_note generates correct AppleScript."""
+    from omniplan_mcp import parser
+
+    captured = {}
+
+    def fake_run(script):
+        captured["script"] = script
+        return "ok"
+
+    monkeypatch.setattr(parser, "_run_as", fake_run)
+    assert parser.set_resource_note("r3", "Resource note") == "ok"
+    assert 'if id of r = 3' in captured["script"]
+    assert 'set note of r to "Resource note"' in captured["script"]
+
+
+def test_set_task_note_escapes_applescript(monkeypatch):
+    """Note text with quotes/backslashes is properly escaped."""
+    from omniplan_mcp import parser
+
+    captured = {}
+
+    def fake_run(script):
+        captured["script"] = script
+        return "ok"
+
+    monkeypatch.setattr(parser, "_run_as", fake_run)
+    parser.set_task_note("258", 'Note with "quotes" and \\backslash')
+    assert 'Note with \\"quotes\\" and \\\\backslash' in captured["script"]

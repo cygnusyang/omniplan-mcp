@@ -517,6 +517,53 @@ def save() -> None:
     click.echo(result)
 
 
+# ── get-note / set-note ────────────────────────────────────────────────────
+
+@cli.command(name="get-note")
+@click.argument("filepath", type=click.Path(exists=True))
+@click.argument("item_id")
+@click.option("--resource", "is_resource", is_flag=True, help="Look up a resource instead of a task")
+def get_note(filepath: str, item_id: str, is_resource: bool) -> None:
+    """Get the note/description of a task or resource from a schedule file."""
+    projects, resources, tasks, violations, assignments, dependencies = parse_file(filepath)
+
+    if is_resource:
+        for r in resources:
+            if r.get("id") == item_id or str(r.get("id")) == item_id.lstrip("r"):
+                note = r.get("note", "")
+                if note:
+                    click.echo(f"Note for resource {r.get('name', item_id)}:\n{note}")
+                else:
+                    click.echo(f"Resource '{r.get('name', item_id)}' has no note.")
+                return
+        click.echo(f"Resource '{item_id}' not found.", err=True)
+        sys.exit(1)
+    else:
+        for t in tasks:
+            if t.get("id") == item_id or str(t.get("id")) == item_id.lstrip("t"):
+                note = t.get("note", "")
+                if note:
+                    click.echo(f"Note for task '{t.get('name', item_id)}':\n{note}")
+                else:
+                    click.echo(f"Task '{t.get('name', item_id)}' has no note.")
+                return
+        click.echo(f"Task '{item_id}' not found.", err=True)
+        sys.exit(1)
+
+
+@cli.command(name="set-note")
+@click.argument("item_id")
+@click.argument("note_text")
+@click.option("--resource", "is_resource", is_flag=True, help="Set a resource note instead of a task note")
+def set_note(item_id: str, note_text: str, is_resource: bool) -> None:
+    """Set the note/description of a task or resource (requires open OmniPlan document)."""
+    if is_resource:
+        result = parser.set_resource_note(item_id, note_text)
+    else:
+        result = parser.set_task_note(item_id, note_text)
+    click.echo(result)
+
+
 # ── entry point ─────────────────────────────────────────────────────────────
 
 def main() -> None:

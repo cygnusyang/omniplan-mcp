@@ -739,6 +739,7 @@ def _parse_xml_content(
                 "id": r.get("id", ""),
                 "name": _get_text(r, "name"),
                 "resource_type": "person",
+                "note": _get_text(r, "note") or "",
             })
 
     # Tasks
@@ -802,6 +803,7 @@ def _parse_xml_content(
             "parent_id": "",
             "priority": int(_get_text(t, "priority") or 500),
             "task_status": task_status,
+            "note": _get_text(t, "note") or "",
         })
         task_map[tid] = tasks[-1]
 
@@ -1723,6 +1725,78 @@ tell application "OmniPlan"
         end if
     end repeat
     return "Task {tid} not found"
+end tell'''
+    return _run_as(script)
+
+
+def set_task_note(
+    task_id: str,
+    note_text: str,
+    filepath: str | None = None,
+    document_id: str | None = None,
+) -> str:
+    """Set a task's note/description via AppleScript.
+
+    Args:
+        task_id: AppleScript numeric task ID.
+        note_text: The note text to set.
+
+    Returns:
+        Confirmation message.
+    """
+    tid = _normalize_task_id(task_id)
+    safe_note = _escape_applescript_string(note_text)
+    prelude = _document_prelude(filepath, document_id)
+    script = f'''
+tell application "OmniPlan"
+{prelude}
+    set sce to frontEditingScenario of project of doc
+    set allTasks to every task of sce
+    repeat with t in allTasks
+        if id of t = {tid} then
+            set tname to name of t
+            set note of t to "{safe_note}"
+            return "Set note for: " & tname
+        end if
+    end repeat
+    return "Task {tid} not found"
+end tell'''
+    return _run_as(script)
+
+
+def set_resource_note(
+    resource_id: str,
+    note_text: str,
+    filepath: str | None = None,
+    document_id: str | None = None,
+) -> str:
+    """Set a resource's note/description via AppleScript.
+
+    Args:
+        resource_id: AppleScript numeric resource ID.
+        note_text: The note text to set.
+
+    Returns:
+        Confirmation message.
+    """
+    rid = str(resource_id).removeprefix("r").removeprefix("R")
+    if not rid.isdigit():
+        raise ValueError(f"Invalid resource ID: {resource_id!r}")
+    safe_note = _escape_applescript_string(note_text)
+    prelude = _document_prelude(filepath, document_id)
+    script = f'''
+tell application "OmniPlan"
+{prelude}
+    set sce to frontEditingScenario of project of doc
+    set allRes to every resource of sce
+    repeat with r in allRes
+        if id of r = {rid} then
+            set rname to name of r
+            set note of r to "{safe_note}"
+            return "Set note for resource: " & rname
+        end if
+    end repeat
+    return "Resource {rid} not found"
 end tell'''
     return _run_as(script)
 

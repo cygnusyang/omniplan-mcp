@@ -413,6 +413,96 @@ class TestCliWriteCommands:
         assert result.exit_code == 0
         assert "document.name" in result.output
 
+    @patch("omniplan_mcp.parser.set_task_note")
+    def test_set_note_task(self, mock_note):
+        mock_note.return_value = "Set note for: Task A"
+        runner = CliRunner()
+        result = runner.invoke(cli, ["set-note", "258", "My task note"])
+        assert result.exit_code == 0
+        assert "Set note for" in result.output
+
+    @patch("omniplan_mcp.parser.set_resource_note")
+    def test_set_note_resource(self, mock_note):
+        mock_note.return_value = "Set note for resource: Alice"
+        runner = CliRunner()
+        result = runner.invoke(cli, ["set-note", "--resource", "r1", "My resource note"])
+        assert result.exit_code == 0
+        assert "resource" in result.output.lower()
+
+
+class TestCliNoteReadCommands:
+    """Test get-note command that reads notes from .oplx files."""
+
+    def test_get_note_task_with_note(self, tmp_path):
+        """Read a task note from .oplx."""
+        actual_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2026-01-01T00:00:00.000Z</start-date>
+  <task id="t1">
+    <title>Task A</title>
+    <effort>28800</effort>
+    <note>This is a task note</note>
+  </task>
+</scenario>"""
+        filepath = _write_temp_oplx(tmp_path, _make_oplx_bytes(actual_xml))
+        runner = CliRunner()
+        result = runner.invoke(cli, ["get-note", filepath, "t1"])
+        assert result.exit_code == 0, result.output
+        assert "This is a task note" in result.output
+
+    def test_get_note_task_no_note(self, tmp_path):
+        """Task with no note shows appropriate message."""
+        actual_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2026-01-01T00:00:00.000Z</start-date>
+  <task id="t1">
+    <title>Task A</title>
+    <effort>28800</effort>
+  </task>
+</scenario>"""
+        filepath = _write_temp_oplx(tmp_path, _make_oplx_bytes(actual_xml))
+        runner = CliRunner()
+        result = runner.invoke(cli, ["get-note", filepath, "t1"])
+        assert result.exit_code == 0
+        assert "has no note" in result.output
+
+    def test_get_note_resource(self, tmp_path):
+        """Read a resource note from .oplx."""
+        actual_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2026-01-01T00:00:00.000Z</start-date>
+  <resource id="r1">
+    <name>Alice</name>
+    <type>Staff</type>
+    <note>Resource note text</note>
+  </resource>
+  <task id="t1">
+    <title>Task</title>
+    <effort>28800</effort>
+  </task>
+</scenario>"""
+        filepath = _write_temp_oplx(tmp_path, _make_oplx_bytes(actual_xml))
+        runner = CliRunner()
+        result = runner.invoke(cli, ["get-note", filepath, "--resource", "r1"])
+        assert result.exit_code == 0, result.output
+        assert "Resource note text" in result.output
+
+    def test_get_note_not_found(self, tmp_path):
+        """Non-existent task ID returns error."""
+        actual_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<scenario xmlns="http://www.omnigroup.com/namespace/OmniPlan/v2" id="test">
+  <start-date>2026-01-01T00:00:00.000Z</start-date>
+  <task id="t1">
+    <title>Task</title>
+    <effort>28800</effort>
+  </task>
+</scenario>"""
+        filepath = _write_temp_oplx(tmp_path, _make_oplx_bytes(actual_xml))
+        runner = CliRunner()
+        result = runner.invoke(cli, ["get-note", filepath, "t999"])
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
 
 class TestErrorHandling:
     """Test error handling."""

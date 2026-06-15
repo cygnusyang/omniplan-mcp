@@ -40,8 +40,10 @@ from .parser import (
     set_task_constraint_date,
     set_task_duration,
     set_task_estimate,
+    set_task_note,
     set_task_progress,
     set_task_type,
+    set_resource_note,
 )
 
 server = Server("omniplan-mcp")
@@ -759,6 +761,48 @@ async def handle_list_tools() -> list[types.Tool]:
                 "required": ["task_id", "before_task_id"],
             },
         ),
+        types.Tool(
+            name="set_task_note",
+            description=(
+                "Set a task's note/description. "
+                "Requires an open OmniPlan document."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID (AppleScript numeric)",
+                    },
+                    "note_text": {
+                        "type": "string",
+                        "description": "Note text to set on the task",
+                    },
+                },
+                "required": ["task_id", "note_text"],
+            },
+        ),
+        types.Tool(
+            name="set_resource_note",
+            description=(
+                "Set a resource's note/description. "
+                "Requires an open OmniPlan document."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "resource_id": {
+                        "type": "string",
+                        "description": "Resource ID (AppleScript numeric)",
+                    },
+                    "note_text": {
+                        "type": "string",
+                        "description": "Note text to set on the resource",
+                    },
+                },
+                "required": ["resource_id", "note_text"],
+            },
+        ),
     ]
 
     document_tools = {
@@ -780,6 +824,8 @@ async def handle_list_tools() -> list[types.Tool]:
         "clear_task_constraint_date",
         "set_task_type",
         "reorder_task",
+        "set_task_note",
+        "set_resource_note",
     }
     for tool in tools:
         if tool.name not in document_tools:
@@ -971,6 +1017,16 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             filepath,
             document_id,
         )
+        return [types.TextContent(type="text", text=result)]
+    elif name == "set_task_note":
+        task_id = arguments.get("task_id", "")
+        note_text = arguments.get("note_text", "")
+        result = set_task_note(task_id, note_text, filepath, document_id)
+        return [types.TextContent(type="text", text=result)]
+    elif name == "set_resource_note":
+        resource_id = arguments.get("resource_id", "")
+        note_text = arguments.get("note_text", "")
+        result = set_resource_note(resource_id, note_text, filepath, document_id)
         return [types.TextContent(type="text", text=result)]
     elif name == "set_task_estimate":
         filepath = arguments.get("filepath", "")
