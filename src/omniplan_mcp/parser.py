@@ -1480,7 +1480,7 @@ def add_dependency(
         # Try to find the open document
         open_paths = _open_document_paths()
         if open_paths:
-            filepath = open_paths[0]
+            filepath = list(open_paths)[0]
         else:
             raise RuntimeError(
                 "Could not determine open document path. "
