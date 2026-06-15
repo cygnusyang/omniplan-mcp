@@ -110,7 +110,7 @@ Configure your MCP host (e.g., Claude Code) to use it:
 
 ```
 src/omniplan_mcp/
-├── __init__.py      # Version (__version__ = "0.4.0")
+├── __init__.py      # Version (__version__ = "0.5.0")
 ├── __main__.py      # CLI entry point: delegates to cli.py
 ├── cli.py           # CLI subcommands (click)
 ├── server.py        # MCP server: tool definitions + output formatters
