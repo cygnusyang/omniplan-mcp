@@ -26,7 +26,14 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.0.0",
+    "click>=8.0.0",
 ]
+
+[project.scripts]
+omniplan-mcp = "omniplan_mcp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [project.urls]
 Homepage = "https://github.com/cygnusyang/omniplan-mcp"

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-An MCP (Model Context Protocol) server that reads **and writes** OmniPlan (.oplx) and Microsoft Project (.mpp) schedule files. macOS only — AppleScript bridge required for .mpp and all write operations.
+An MCP (Model Context Protocol) server **and CLI** that reads **and writes** OmniPlan (.oplx) and Microsoft Project (.mpp) schedule files. macOS only — AppleScript bridge required for .mpp and all write operations.
 
 ## Core Principle: Always use MCP tools and AppleScript — never directly modify files
 
@@ -20,14 +20,74 @@ All modifications to OmniPlan schedule data MUST go through:
 ```
 src/omniplan_mcp/
 ├── __init__.py      # Version (__version__ = "0.4.0")
-├── __main__.py      # CLI entry point: python -m omniplan_mcp
+├── __main__.py      # Entry point: delegates to cli.main()
+├── cli.py           # CLI subcommands (click) — both human CLI and MCP server mode
 ├── server.py        # MCP server: tool definitions + output formatters
 └── parser.py        # Two parsing paths + write operations (AppleScript bridge)
 tests/
 └── test_parser.py   # Unit tests with in-memory .oplx ZIPs
 ```
 
-### Key Design Decisions
+### Dual-mode design
+
+The package provides **two interfaces** from the same codebase:
+
+1. **CLI mode** (`omniplan-mcp read ...`) — human-friendly terminal output
+2. **MCP server mode** (`omniplan-mcp serve`) — JSON-RPC over stdio for AI tools
+
+Both share the same parser (`parser.py`) and AppleScript bridge.
+
+## CLI Commands
+
+### Read commands (work from file, no OmniPlan needed for .oplx)
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `read <file>` | Display complete schedule | `omniplan-mcp read plan.oplx` |
+| `summary <file>` | High-level summary | `omniplan-mcp summary plan.oplx --json` |
+| `search <file> <query>` | Search tasks | `omniplan-mcp search plan.oplx "design"` |
+| `tasks <file>` | List all tasks | `omniplan-mcp tasks plan.oplx --tree` |
+| `resources <file>` | List resources | `omniplan-mcp resources plan.oplx` |
+| `dependencies <file>` | List dependencies | `omniplan-mcp dependencies plan.oplx` |
+
+### Write commands (require open OmniPlan document)
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `serve` | Start MCP server (stdio) | `omniplan-mcp serve` |
+| `lookup <name>` | Find task by name | `omniplan-mcp lookup "Design"` |
+| `set-done <id>` | Mark task 100% done | `omniplan-mcp set-done 258 --subtree` |
+| `set-done-by-name <name>` | Same, by name | `omniplan-mcp set-done-by-name "Design"` |
+| `add-dep <dependent> <prereq>` | Add dependency | `omniplan-mcp add-dep 260 258` |
+| `rm-dep <dependent> <prereq>` | Remove dependency | `omniplan-mcp rm-dep 260 258` |
+| `set-duration <id> <duration>` | Set duration | `omniplan-mcp set-duration 258 3d` |
+| `clear-constraint <id>` | Remove locked date | `omniplan-mcp clear-constraint 258` |
+| `rename <id> <name>` | Rename task | `omniplan-mcp rename 258 "New"` |
+| `delete <id>` | Delete task | `omniplan-mcp delete 258` |
+| `add-task <parent> <name> <duration>` | Add child task | `omniplan-mcp add-task 258 "Sub" 2d` |
+| `add-resource <name>` | Add resource | `omniplan-mcp add-resource "Alice"` |
+| `set-estimate <id> <estimate>` | Set effort estimate | `omniplan-mcp set-estimate 258 3d` |
+| `save` | Save document | `omniplan-mcp save` |
+| `eval-script <script>` | Run raw AppleScript/JS | `omniplan-mcp eval-script --js '...'` |
+
+Duration format: seconds (`3600`), days (`3d`), hours (`4h`), minutes (`30m`).
+
+## MCP Server Configuration
+
+Configure your MCP host to use `omniplan-mcp serve`:
+
+```json
+{
+  "mcpServers": {
+    "omniplan": {
+      "command": "omniplan-mcp",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+## Key Design Decisions
 
 1. **Dual parser architecture**: `.mpp` files open OmniPlan and read via AppleScript's in-memory object model. `.oplx` files parse XML directly (no OmniPlan needed). Both return identical 6-tuples: `(projects, resources, tasks, violations, assignments, dependencies)`.
 
@@ -87,8 +147,9 @@ pip install -e .
 # Run tests
 python -m pytest tests/ -v
 
-# Run the MCP server directly (stdio mode)
-python -m omniplan_mcp
+# Run the CLI directly
+omniplan-mcp read schedule.oplx
+omniplan-mcp serve  # MCP server mode
 
 # Build distribution
 python -m build
