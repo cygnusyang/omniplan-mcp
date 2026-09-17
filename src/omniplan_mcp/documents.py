@@ -123,12 +123,15 @@ if (docs.length === 0) {
   const inner = JSON.parse(app.evaluateJavascript(`(function(){
     function fmt(date) {
       if (!date) return null;
-      // Use UTC components — ISO date strings ('2027-03-15') parse as UTC
-      // midnight on write, so reading via local-time getters introduces a
-      // one-day skew west of UTC.
-      var y = date.getUTCFullYear();
-      var m = ('0' + (date.getUTCMonth() + 1)).slice(-2);
-      var dd = ('0' + date.getUTCDate()).slice(-2);
+      // LOCAL components. OmniPlan materializes day-granularity dates as
+      // JS Dates at local midnight (new Date(y, m-1, d)); local getters
+      // round-trip the stored calendar date in any timezone, while UTC
+      // getters read them one day early east of UTC (e.g. UTC+8). The
+      // write side is symmetric: update_project writes via dateFromISO
+      // (local-midnight construction) — see tasks.py _fmt_date.
+      var y = date.getFullYear();
+      var m = ('0' + (date.getMonth() + 1)).slice(-2);
+      var dd = ('0' + date.getDate()).slice(-2);
       return y + '-' + m + '-' + dd;
     }
     try {
@@ -191,7 +194,13 @@ async def update_project(
 
     script = f"""
 const _proj = document.project;
-_proj.actual.startDate = new Date({json.dumps(start_date)});
+function dateFromISO(iso) {{
+  if (!iso) return null;
+  var parts = iso.match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})$/);
+  if (!parts) return new Date(iso);
+  return new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+}}
+_proj.actual.startDate = dateFromISO({json.dumps(start_date)});
 return null;
 """
     await run_omnijs(script)

@@ -9,21 +9,40 @@ def _doc_selector() -> str:
 
 
 def _fmt_date() -> str:
-    """JS helper to format dates as YYYY-MM-DD.
+    """JS helpers for date round-trips, symmetric across read and write.
 
-    Use UTC components — ISO date strings ('2027-04-12') parse as UTC
-    midnight on write, so reading via local-time getters introduces a
-    one-day skew west of UTC. Symptom prior to fix: writing 2027-04-12
-    as a constraint date read back as 2027-04-11 in Eastern timezone.
-    Same fix as documents.py applied 2026-05-02.
+    Read side (`fmtDate`): OmniPlan hands day-granularity dates back as
+    JS Dates built at LOCAL midnight (`new Date(y, m-1, d)`), so
+    formatting with local getters round-trips the stored calendar date
+    in any timezone. UTC getters read local-midnight dates one day
+    early east of UTC (observed at UTC+8: writing 2026-09-19 read back
+    2026-09-18).
+
+    Write side (`dateFromISO`): `new Date("YYYY-MM-DD")` parses as UTC
+    midnight, so west of UTC its local calendar date is the previous
+    day and OmniPlan can store the wrong day. `dateFromISO` builds a
+    local-midnight Date instead, keeping the calendar date unambiguous
+    and symmetric with `fmtDate` in every timezone.
+
+    Supersedes the v0.4.1/v0.4.2 "use getUTC* getters" fix (2026-05-02):
+    that held in the Eastern-timezone (west of UTC) environment it was
+    written for, but east of UTC it read local-midnight dates back one
+    day early.
     """
     return """
 function fmtDate(d) {
   if (!d) return null;
-  var y = d.getUTCFullYear();
-  var m = ('0' + (d.getUTCMonth() + 1)).slice(-2);
-  var day = ('0' + d.getUTCDate()).slice(-2);
+  var y = d.getFullYear();
+  var m = ('0' + (d.getMonth() + 1)).slice(-2);
+  var day = ('0' + d.getDate()).slice(-2);
   return y + '-' + m + '-' + day;
+}
+
+function dateFromISO(iso) {
+  if (!iso) return null;
+  var parts = iso.match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);
+  if (!parts) return new Date(iso);
+  return new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
 }
 """
 
@@ -133,9 +152,9 @@ async def query_tasks(
     elif completed is False:
         filters.append("!(t.effortDone >= t.effort && t.effort > 0)")
     if due_before:
-        filters.append(f"t.endDate && t.endDate < new Date({json.dumps(due_before)})")
+        filters.append(f"t.endDate && t.endDate < dateFromISO({json.dumps(due_before)})")
     if due_after:
-        filters.append(f"t.endDate && t.endDate > new Date({json.dumps(due_after)})")
+        filters.append(f"t.endDate && t.endDate > dateFromISO({json.dumps(due_after)})")
 
     # Parenthesize each clause before joining with &&. The keyword filter
     # uses `||` internally; without explicit parens, JS operator precedence
@@ -242,18 +261,27 @@ async def create_task(
         note: Optional task description.
         manual_start_date: ISO date string for manual start.
         manual_end_date: ISO date string for manual end.
+            REJECTED — OmniPlan derives a task's end as manual_start_date +
+            effort and ignores writes to task.manualEndDate (probed live
+            2026-09-17). Pass manual_start_date and effort_seconds instead.
         effort_seconds: Total effort in person-seconds (e.g. 14400 for 4h).
         min_effort_seconds: Three-point estimation minimum (person-seconds).
         expected_effort_seconds: Three-point estimation expected value.
         max_effort_seconds: Three-point estimation maximum.
     """
+    if manual_end_date is not None:
+        raise ValueError(
+            "manual_end_date is not settable: OmniPlan derives a task's end "
+            "as manual_start_date + effort and ignores writes to "
+            "task.manualEndDate (probed live 2026-09-17). Pass "
+            "manual_start_date and effort_seconds instead."
+        )
     doc_sel = _doc_selector()
     task_to_obj = _task_to_obj()
 
     set_type = f"newTask.type = TaskType.{task_type};" if task_type else ""
     set_note = f"newTask.note = {json.dumps(note)};" if note else ""
-    set_start = f"newTask.manualStartDate = new Date({json.dumps(manual_start_date)});" if manual_start_date else ""
-    set_end = f"newTask.manualEndDate = new Date({json.dumps(manual_end_date)});" if manual_end_date else ""
+    set_start = f"newTask.manualStartDate = dateFromISO({json.dumps(manual_start_date)});" if manual_start_date else ""
     set_effort = f"newTask.effort = {int(effort_seconds)};" if effort_seconds is not None else ""
     set_min_effort = f"newTask.minEffortEstimate = {int(min_effort_seconds)};" if min_effort_seconds is not None else ""
     set_expected_effort = f"newTask.expectedEffortEstimate = {int(expected_effort_seconds)};" if expected_effort_seconds is not None else ""
@@ -286,7 +314,6 @@ newTask.title = {json.dumps(title)};
 {set_type}
 {set_note}
 {set_start}
-{set_end}
 {set_effort}
 {set_min_effort}
 {set_expected_effort}
@@ -316,9 +343,11 @@ async def create_tasks(
         tasks: list of task specs. Each spec is a dict with the same
             fields `create_task` accepts:
               title (required), parent_id, task_type, note,
-              manual_start_date, manual_end_date, effort_seconds,
+              manual_start_date, effort_seconds,
               min_effort_seconds, expected_effort_seconds,
               max_effort_seconds.
+            manual_end_date is REJECTED — OmniPlan derives end as
+            manual_start_date + effort and ignores task.manualEndDate writes.
             Plus one extra:
               parent_index — int, optional. References another task in
               the same batch by zero-based position. Must be less than
@@ -349,6 +378,13 @@ async def create_tasks(
         parent_index = t.get("parent_index")
         if parent_id is not None and parent_index is not None:
             raise ValueError(f"tasks[{i}]: pass at most one of parent_id, parent_index")
+        if t.get("manual_end_date") is not None:
+            raise ValueError(
+                f"tasks[{i}].manual_end_date is not settable: OmniPlan derives "
+                "a task's end as manual_start_date + effort and ignores writes "
+                "to task.manualEndDate (probed live 2026-09-17). Pass "
+                "manual_start_date and effort_seconds instead."
+            )
         if parent_index is not None:
             if not isinstance(parent_index, int) or parent_index < 0 or parent_index >= i:
                 raise ValueError(
@@ -361,7 +397,6 @@ async def create_tasks(
             "task_type": t.get("task_type"),
             "note": t.get("note"),
             "manual_start_date": t.get("manual_start_date"),
-            "manual_end_date": t.get("manual_end_date"),
             "effort_seconds": t.get("effort_seconds"),
             "min_effort_seconds": t.get("min_effort_seconds"),
             "expected_effort_seconds": t.get("expected_effort_seconds"),
@@ -429,8 +464,7 @@ for (let i = 0; i < specs.length; i++) {{
   t.title = s.title;
   if (s.task_type) t.type = TaskType[s.task_type];
   if (s.note !== null && s.note !== undefined) t.note = s.note;
-  if (s.manual_start_date) t.manualStartDate = new Date(s.manual_start_date);
-  if (s.manual_end_date) t.manualEndDate = new Date(s.manual_end_date);
+  if (s.manual_start_date) t.manualStartDate = dateFromISO(s.manual_start_date);
   if (s.effort_seconds !== null && s.effort_seconds !== undefined) t.effort = s.effort_seconds;
   if (s.min_effort_seconds !== null && s.min_effort_seconds !== undefined) t.minEffortEstimate = s.min_effort_seconds;
   if (s.expected_effort_seconds !== null && s.expected_effort_seconds !== undefined) t.expectedEffortEstimate = s.expected_effort_seconds;
@@ -473,6 +507,9 @@ async def update_task(
         completed: True to mark complete, False to mark incomplete.
         manual_start_date: ISO date string, or empty string to clear.
         manual_end_date: ISO date string, or empty string to clear.
+            REJECTED — OmniPlan derives a task's end as manual_start_date +
+            effort and ignores writes to task.manualEndDate (probed live
+            2026-09-17). Pass manual_start_date and effort_seconds instead.
         effort_seconds: Total effort in person-seconds. Pass 0 to set to zero;
             None (omit) to leave unchanged.
         min_effort_seconds: Three-point estimation minimum (person-seconds).
@@ -487,6 +524,13 @@ async def update_task(
         end_no_later_than: ISO date string, or empty string to clear.
             Maps to `task.endNoLaterThanDate`.
     """
+    if manual_end_date is not None:
+        raise ValueError(
+            "manual_end_date is not settable: OmniPlan derives a task's end "
+            "as manual_start_date + effort and ignores writes to "
+            "task.manualEndDate (probed live 2026-09-17). Pass "
+            "manual_start_date and effort_seconds instead."
+        )
     doc_sel = _doc_selector()
     task_to_obj = _task_to_obj()
 
@@ -502,11 +546,7 @@ async def update_task(
     if manual_start_date == "":
         updates.append("task.manualStartDate = null;")
     elif manual_start_date is not None:
-        updates.append(f"task.manualStartDate = new Date({json.dumps(manual_start_date)});")
-    if manual_end_date == "":
-        updates.append("task.manualEndDate = null;")
-    elif manual_end_date is not None:
-        updates.append(f"task.manualEndDate = new Date({json.dumps(manual_end_date)});")
+        updates.append(f"task.manualStartDate = dateFromISO({json.dumps(manual_start_date)});")
     if effort_seconds is not None:
         updates.append(f"task.effort = {int(effort_seconds)};")
     if min_effort_seconds is not None:
@@ -524,7 +564,7 @@ async def update_task(
         if param_value == "":
             updates.append(f"task.{omnijs_prop} = null;")
         elif param_value is not None:
-            updates.append(f"task.{omnijs_prop} = new Date({json.dumps(param_value)});")
+            updates.append(f"task.{omnijs_prop} = dateFromISO({json.dumps(param_value)});")
 
     if not updates:
         return json.dumps({"error": "No fields to update."})

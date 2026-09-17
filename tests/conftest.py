@@ -9,11 +9,8 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
-
-OMNIPLAN_CONTAINER = Path.home() / "Library" / "Containers" / "com.omnigroup.OmniPlan4"
 
 
 def _omniplan_running() -> bool:
@@ -30,11 +27,34 @@ def _omniplan_running() -> bool:
 
 
 def _omniplan_available() -> tuple[bool, str]:
-    if not OMNIPLAN_CONTAINER.exists():
-        return False, f"OmniPlan 4 sandbox not found at {OMNIPLAN_CONTAINER}"
     if not _omniplan_running():
         return False, "OmniPlan 4 is not running (start the app and open a document)"
-    return True, ""
+    # No sandbox-container requirement: non-sandbox installs (direct .app
+    # download) run without ~/Library/Containers/com.omnigroup.OmniPlan4, so
+    # the old existence check falsely skipped every integration test on those
+    # machines. Probe for a responding front document instead.
+    try:
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e",
+             'Application("OmniPlan").documents().length'],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        if result.returncode != 0:
+            return False, (
+                f"osascript front-document probe failed: {result.stderr.strip()[:160]}"
+            )
+        try:
+            count = int(result.stdout.strip())
+        except ValueError:
+            return False, (
+                f"osascript probe returned non-numeric output: "
+                f"{result.stdout.strip()[:80]!r}"
+            )
+        if count < 1:
+            return False, "OmniPlan 4 is running but no document is open"
+        return True, ""
+    except Exception as e:  # osascript missing, timeout, etc.
+        return False, f"osascript front-document probe failed: {e}"
 
 
 @pytest.fixture(scope="session")

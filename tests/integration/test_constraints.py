@@ -19,10 +19,10 @@ for the post-mortem.
 Test methodology: each constraint setter is asserted to round-trip the same
 value as the existing `manual_start_date` setter when given the same input.
 This isolates "does the new field persist" from the wider date-format /
-timezone round-trip behaviour of the codebase (the `fmtDate` JS helper renders
-in local time; `new Date('YYYY-MM-DD')` parses as midnight UTC — combined
-they shift by one calendar day in west-of-UTC zones, but consistently across
-every date field, including the existing ones).
+timezone round-trip behaviour of the codebase. Dates are written through the
+`dateFromISO` helper (local-midnight construction, not `new Date('YYYY-MM-DD')`
+which parses as UTC midnight) and read back with local getters (`fmtDate`), so
+round-trips are timezone-independent — see `tasks.py _fmt_date`.
 """
 from __future__ import annotations
 

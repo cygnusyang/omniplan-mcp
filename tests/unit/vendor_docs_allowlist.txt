@@ -22,11 +22,12 @@
 modified
 path
 
-# JavaScript built-in Date methods used inside our omniJS fmtDate helpers.
-# These belong to ECMAScript, not the omniJS class surface.
-getUTCDate
-getUTCFullYear
-getUTCMonth
+# JavaScript built-in Date methods used inside our omniJS fmtDate /
+# dateFromISO helpers. These belong to ECMAScript, not the omniJS class
+# surface. (Local getters since 2026-09-17 — see CHANGELOG [Unreleased].)
+getDate
+getFullYear
+getMonth
 
 # Identifiers that appear only in Python docstrings (not in shipped JS).
 # The lint extracts from every triple-quoted string in src/, which is

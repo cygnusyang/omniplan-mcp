@@ -11,6 +11,42 @@ significant remaining upstream code (kept verbatim under MIT). At v0.4.0 the
 distribution was renamed to `mcp-omniplan-jtr` and the project posture
 changed from "fork" to "build inspired by". See `LICENSE` for attribution.
 
+## [Unreleased]
+
+### Fixed
+- **Timezone-independent date round-trips.** The v0.4.1/v0.4.2 fix switched
+  date reads to `getUTC*` getters; that held in the Eastern timezone it was
+  written for, but east of UTC (observed at UTC+8) it read OmniPlan's
+  local-midnight dates one day early — writing `2026-09-19` read back
+  `2026-09-18`.
+  - Read side: `fmtDate` / `fmt` now use **local** getters everywhere
+    (`documents.py`, `tasks.py`).
+  - Write side: all date writes (`manual_start_date`, `manual_end_date`, the
+    four constraint dates, project `actual.startDate`) now build a
+    local-midnight Date via a new `dateFromISO` helper instead of
+    `new Date("YYYY-MM-DD")`, which parses as UTC midnight and could store
+    the previous day west of UTC.
+  - `query_tasks` date filters compare local-midnight instants on both sides,
+    so "ending before DATE" is now a true calendar-date boundary in any
+    timezone.
+
+### Changed
+- **`manual_end_date` is now rejected on `create_task`, `create_tasks`, and
+  `update_task`.** Probed live 2026-09-17: OmniPlan derives a task's end as
+  `manual_start_date + effort` and ignores writes to `task.manualEndDate` in
+  every scheduling configuration, so accepting the parameter was a silent
+  no-op. Callers now get a `ValueError` steering them to
+  `manual_start_date` + `effort_seconds`. `manual_end_date` remains in tool
+  output (read side is unaffected).
+
+### Tests
+- `tests/conftest.py` `requires_omniplan` gate no longer requires the
+  sandbox container at `~/Library/Containers/com.omnigroup.OmniPlan4`.
+  Non-sandbox installs (direct `.app` download) run without it and were
+  silently skipping every integration test. The gate now probes for a
+  responding front document via `osascript` (`Application("OmniPlan")
+  .documents().length`).
+
 ## [0.4.5] - 2026-05-07
 
 ### Fixed
