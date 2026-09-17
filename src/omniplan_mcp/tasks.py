@@ -41,8 +41,21 @@ function fmtDate(d) {
 function dateFromISO(iso) {
   if (!iso) return null;
   var parts = iso.match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);
-  if (!parts) return new Date(iso);
-  return new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+  if (!parts) {
+    var full = new Date(iso);
+    if (isNaN(full.getTime())) throw new Error('invalid date: ' + iso);
+    return full;
+  }
+  var y = Number(parts[1]);
+  var mo = Number(parts[2]);
+  var da = Number(parts[3]);
+  var d = new Date(y, mo - 1, da);
+  // JS Date silently normalizes out-of-range components (2026-13-45 ->
+  // 2027-02-14). Reject so we never store a wrong calendar date silently.
+  if (d.getFullYear() !== y || d.getMonth() !== mo - 1 || d.getDate() !== da) {
+    throw new Error('invalid date: ' + iso);
+  }
+  return d;
 }
 """
 
@@ -507,9 +520,10 @@ async def update_task(
         completed: True to mark complete, False to mark incomplete.
         manual_start_date: ISO date string, or empty string to clear.
         manual_end_date: ISO date string, or empty string to clear.
-            REJECTED — OmniPlan derives a task's end as manual_start_date +
-            effort and ignores writes to task.manualEndDate (probed live
-            2026-09-17). Pass manual_start_date and effort_seconds instead.
+            REJECTED (including "") — OmniPlan derives a task's end as
+            manual_start_date + effort and ignores writes to
+            task.manualEndDate (probed live 2026-09-17). Pass
+            manual_start_date and effort_seconds instead.
         effort_seconds: Total effort in person-seconds. Pass 0 to set to zero;
             None (omit) to leave unchanged.
         min_effort_seconds: Three-point estimation minimum (person-seconds).

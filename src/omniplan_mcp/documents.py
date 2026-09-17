@@ -197,8 +197,19 @@ const _proj = document.project;
 function dateFromISO(iso) {{
   if (!iso) return null;
   var parts = iso.match(/^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})$/);
-  if (!parts) return new Date(iso);
-  return new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+  if (!parts) {{
+    var full = new Date(iso);
+    if (isNaN(full.getTime())) throw new Error('invalid date: ' + iso);
+    return full;
+  }}
+  var y = Number(parts[1]);
+  var mo = Number(parts[2]);
+  var da = Number(parts[3]);
+  var d = new Date(y, mo - 1, da);
+  if (d.getFullYear() !== y || d.getMonth() !== mo - 1 || d.getDate() !== da) {{
+    throw new Error('invalid date: ' + iso);
+  }}
+  return d;
 }}
 _proj.actual.startDate = dateFromISO({json.dumps(start_date)});
 return null;

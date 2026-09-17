@@ -21,11 +21,13 @@ changed from "fork" to "build inspired by". See `LICENSE` for attribution.
   `2026-09-18`.
   - Read side: `fmtDate` / `fmt` now use **local** getters everywhere
     (`documents.py`, `tasks.py`).
-  - Write side: all date writes (`manual_start_date`, `manual_end_date`, the
-    four constraint dates, project `actual.startDate`) now build a
-    local-midnight Date via a new `dateFromISO` helper instead of
-    `new Date("YYYY-MM-DD")`, which parses as UTC midnight and could store
-    the previous day west of UTC.
+  - Write side: all settable date writes (`manual_start_date`, the four
+    constraint dates, project `actual.startDate`) now build a local-midnight
+    Date via a new `dateFromISO` helper instead of `new Date("YYYY-MM-DD")`,
+    which parses as UTC midnight and could store the previous day west of
+    UTC. `dateFromISO` also rejects impossible calendar dates (e.g.
+    `2026-02-31`) instead of letting JS normalize them.
+    `manual_end_date` is removed from writes — see Changed below.
   - `query_tasks` date filters compare local-midnight instants on both sides,
     so "ending before DATE" is now a true calendar-date boundary in any
     timezone.
